@@ -1,0 +1,33 @@
+# Third-party action SHA pins — aligned with OpenCI manifest
+actions:
+  actions/checkout:
+    version: v4
+    sha: <SHA>
+
+  actions/cache:
+    version: v4
+    sha: <SHA>
+
+  step-security/harden-runner:
+    version: v2
+    sha: <SHA>
+
+  peter-evans/create-issue-from-file:
+    version: v6
+    sha: <SHA>
+
+  peter-evans/create-pull-request:
+    version: v7
+    sha: <SHA>
+
+  nick-fields/retry:
+    version: v3
+    sha: <SHA>
+
+  DeveloperMetrics/deployment-frequency:
+    version: main
+    sha: <SHA>
+
+  DeveloperMetrics/lead-time-for-changes:
+    version: main
+    sha: <SHA>

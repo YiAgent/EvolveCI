@@ -1,0 +1,82 @@
+name: "Read State"
+description: "Read state from cache first, fallback to _state orphan branch."
+
+inputs:
+  key:
+    description: "Cache key (e.g. retries:org/repo:2026-04-30)"
+    required: true
+  state-path:
+    description: "Path on _state branch (e.g. daily-counters/2026-04-30.json)"
+    required: true
+  default:
+    description: "Default value if not found"
+    required: false
+    default: "{}"
+
+outputs:
+  hit:
+    description: "Whether the value was found"
+    value: ${{ steps.read.outputs.hit }}
+  value:
+    description: "JSON string value"
+    value: ${{ steps.read.outputs.value }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: read
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+
+        KEY="${{ inputs.key }}"
+        STATE_PATH="${{ inputs.state-path }}"
+        DEFAULT="${{ inputs.default }}"
+        CACHE_DIR=".state-cache"
+        CACHE_FILE="$CACHE_DIR/data.json"
+
+        # Try cache first
+        if [ -f "$CACHE_FILE" ]; then
+          value=$(jq -r '.' "$CACHE_FILE" 2>/dev/null || echo "")
+          if [ -n "$value" ] && [ "$value" != "null" ]; then
+            {
+              echo "hit=true"
+              echo "value<<EVOLVECI_EOF"
+              echo "$value"
+              echo "EVOLVECI_EOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "::notice::Cache hit for $KEY"
+            exit 0
+          fi
+        fi
+
+        # Cache miss — fetch from _state branch
+        echo "::notice::Cache miss for $KEY, fetching from _state branch"
+
+        git fetch origin _state --depth=1 2>/dev/null || true
+
+        value=$(git show "origin/_state:$STATE_PATH" 2>/dev/null || echo "")
+
+        if [ -n "$value" ] && [ "$value" != "" ]; then
+          # Write back to cache
+          mkdir -p "$CACHE_DIR"
+          echo "$value" > "$CACHE_FILE"
+
+          {
+            echo "hit=true"
+            echo "value<<EVOLVECI_EOF"
+            echo "$value"
+            echo "EVOLVECI_EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "::notice::Found $STATE_PATH on _state branch"
+        else
+          {
+            echo "hit=false"
+            echo "value<<EVOLVECI_EOF"
+            echo "$DEFAULT"
+            echo "EVOLVECI_EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "::notice::Not found: $STATE_PATH, using default"
+        fi

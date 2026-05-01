@@ -1,0 +1,103 @@
+name: "Classify Heuristic"
+description: "Tier 2: Keyword-based heuristic classification. Zero AI cost."
+
+inputs:
+  log:
+    description: "Plaintext log (redacted)"
+    required: true
+  failed-step:
+    description: "Name of the failed step"
+    required: false
+    default: ""
+  flakiness-score:
+    description: "Historical flakiness score (0-100)"
+    required: false
+    default: "0"
+
+outputs:
+  classified:
+    description: "Whether classification succeeded"
+    value: ${{ steps.classify.outputs.classified }}
+  category:
+    description: "Failure category"
+    value: ${{ steps.classify.outputs.category }}
+  severity:
+    description: "Severity level"
+    value: ${{ steps.classify.outputs.severity }}
+  confidence:
+    description: "Confidence level: high, medium, low"
+    value: ${{ steps.classify.outputs.confidence }}
+  should-rerun:
+    description: "Whether to auto-rerun"
+    value: ${{ steps.classify.outputs.should-rerun }}
+  should-notify:
+    description: "Whether to notify"
+    value: ${{ steps.classify.outputs.should-notify }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: classify
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        LOG='${{ inputs.log }}'
+        FLAKINESS="${{ inputs.flakiness-score }}"
+
+        if [ -z "$LOG" ]; then
+          {
+            echo "classified=false"
+            echo "category=unknown"
+            echo "severity=medium"
+            echo "confidence=low"
+            echo "should-rerun=false"
+            echo "should-notify=true"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # Rule matching — first hit wins
+        # Pattern: keywords | category | severity | confidence | should-rerun | should-notify
+        rules=(
+          'ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ReadTimeoutError|context deadline exceeded|flaky|low|high|true|false'
+          'rate.?limit|429|too many requests|toomanyrequests|flaky|low|high|true|false'
+          'runner.*did not connect|runner.*failed to start|No space left on device|flaky|medium|medium|true|false'
+          'Permission denied|403 Forbidden|authentication failed|unauthorized|security|high|high|false|true'
+          'npm ERR!|pip install.*error|go:.*module.*not found|resolve.*version.*conflict|dependency|medium|medium|false|true'
+          'FAIL|AssertionError|SyntaxError|TypeError|Compilation failed|Test failed|code|medium|medium|false|true'
+          'docker.*daemon|OOM|Cannot allocate memory|CrashLoopBackOff|ImagePullBackOff|infra|high|medium|false|true'
+        )
+
+        matched=false
+        for rule in "${rules[@]}"; do
+          IFS='|' read -r pattern category severity confidence should_rerun should_notify <<< "$rule"
+          if echo "$LOG" | grep -qEi "$pattern" 2>/dev/null; then
+            matched=true
+            break
+          fi
+        done
+
+        if [ "$matched" = "false" ]; then
+          category="unknown"
+          severity="medium"
+          confidence="low"
+          should_rerun="false"
+          should_notify="true"
+        fi
+
+        # Confidence downgrade: if flakiness > 50 and not flaky
+        if [ "$FLAKINESS" -gt 50 ] 2>/dev/null && [ "$category" != "flaky" ]; then
+          confidence="low"
+        fi
+
+        {
+          echo "classified=$matched"
+          echo "category=$category"
+          echo "severity=$severity"
+          echo "confidence=$confidence"
+          echo "should-rerun=$should_rerun"
+          echo "should-notify=$should_notify"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "::notice::Heuristic classification: $category ($severity, confidence=$confidence)"

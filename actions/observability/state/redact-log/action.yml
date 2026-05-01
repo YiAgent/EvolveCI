@@ -1,0 +1,48 @@
+name: "Redact Log"
+description: "Remove sensitive information from logs before AI processing or issue posting."
+
+inputs:
+  log:
+    description: "Base64-encoded raw log"
+    required: true
+
+outputs:
+  redacted:
+    description: "Plaintext redacted log"
+    value: ${{ steps.redact.outputs.redacted }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: redact
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        LOG_B64="${{ inputs.log }}"
+        if [ -z "$LOG_B64" ]; then
+          echo "redacted=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # Decode base64
+        decoded=$(echo "$LOG_B64" | base64 -d 2>/dev/null || echo "$LOG_B64")
+
+        # Apply redaction patterns
+        redacted=$(echo "$decoded" | sed -E \
+          -e 's/token\s*=\s*[a-zA-Z0-9_.-]+/token=***REDACTED***/g' \
+          -e 's/password\s*=\s*[a-zA-Z0-9_.-]+/password=***REDACTED***/g' \
+          -e 's/secret\s*=\s*[a-zA-Z0-9_.-]+/secret=***REDACTED***/g' \
+          -e 's/api[_-]?key\s*=\s*[a-zA-Z0-9_.-]+/api_key=***REDACTED***/g' \
+          -e 's/Bearer\s+[a-zA-Z0-9_.-]+/Bearer ***REDACTED***/g' \
+          -e 's/ghp_[a-zA-Z0-9]{36}/ghp_***REDACTED***/g' \
+          -e 's/gho_[a-zA-Z0-9]{36}/gho_***REDACTED***/g' \
+          -e 's/sk-[a-zA-Z0-9]{20,}/sk-***REDACTED***/g' \
+          -e 's/(10|172|192)\.[0-9]+\.[0-9]+\.[0-9]+/***REDACTED_IP***/g')
+
+        # Write using EOF heredoc
+        {
+          echo "redacted<<EVOLVECI_EOF"
+          echo "$redacted"
+          echo "EVOLVECI_EOF"
+        } >> "$GITHUB_OUTPUT"

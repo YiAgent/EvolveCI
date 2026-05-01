@@ -1,0 +1,236 @@
+name: "CI Health - Daily Report"
+
+on:
+  schedule:
+    - cron: "0 1 * * 1-5"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-health-daily
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      stats: ${{ steps.aggregate.outputs.stats }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@<SHA>
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Load onboarded repos
+        id: repos
+        shell: bash
+        run: |
+          repos=$(yq -r '.repos[].name' data/onboarded-repos.yml | paste -sd, -)
+          echo "repos=$repos" >> "$GITHUB_OUTPUT"
+
+      - name: Query GitHub Actions
+        id: query
+        uses: ./actions/observability/sources/query-github-actions
+        with:
+          repos: ${{ steps.repos.outputs.repos }}
+          since: "24h"
+          status: all
+          include-logs: "false"
+          token: ${{ secrets.CROSS_REPO_PAT }}
+
+      - name: Compute per-workflow stats
+        id: stats
+        shell: bash
+        run: |
+          RUNS='${{ steps.query.outputs.runs }}'
+
+          # Group by repo+'/'+workflow
+          stats=$(echo "$RUNS" | jq '
+            group_by(.repo + "/" + .workflowName) |
+            map({
+              key: .[0].repo + "/" + .[0].workflowName,
+              repo: .[0].repo,
+              workflow: .[0].workflowName,
+              total: length,
+              failed: [.[] | select(.conclusion == "failure")] | length,
+              success: [.[] | select(.conclusion == "success")] | length,
+              failure_rate: (if length > 0 then (([.[] | select(.conclusion == "failure")] | length) * 100 / length | floor) else 0 end)
+            })
+          ')
+
+          echo "stats<<EVOLVECI_EOF" >> "$GITHUB_OUTPUT"
+          echo "$stats" >> "$GITHUB_OUTPUT"
+          echo "EVOLVECI_EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Detect degradations
+        id: degradations
+        shell: bash
+        run: |
+          STATS='${{ steps.stats.outputs.stats }}'
+          TODAY=$(date -u +%Y-%m-%d)
+
+          degradations="[]"
+
+          while IFS= read -r wf; do
+            key=$(echo "$wf" | jq -r '.key')
+            current_rate=$(echo "$wf" | jq -r '.failure_rate')
+            repo=$(echo "$wf" | jq -r '.repo')
+            workflow=$(echo "$wf" | jq -r '.workflow')
+
+            # Read historical health from _state
+            state_path="workflow-health/$(echo "$key" | tr '/' '-').json"
+            git fetch origin _state --depth=1 2>/dev/null || true
+            history=$(git show "origin/_state:$state_path" 2>/dev/null || echo '{"daily":{}}')
+
+            # Calculate 7-day average
+            seven_day_avg=$(echo "$history" | jq -r '
+              .daily // {} |
+              to_entries |
+              sort_by(.key) |
+              .[-7:] |
+              if length > 0 then (map(.value) | add / length | floor) else 0 end')
+
+            delta=$((current_rate - seven_day_avg))
+
+            if [ "$delta" -gt 10 ]; then
+              degradations=$(echo "$degradations" | jq \
+                --arg key "$key" \
+                --argjson current "$current_rate" \
+                --argjson avg "$seven_day_avg" \
+                --argjson delta "$delta" \
+                '. + [{key: $key, current: $current, avg_7day: $avg, delta: $delta}]')
+            fi
+          done < <(echo "$STATS" | jq -c '.[]')
+
+          echo "degradations<<EVOLVECI_EOF" >> "$GITHUB_OUTPUT"
+          echo "$degradations" >> "$GITHUB_OUTPUT"
+          echo "EVOLVECI_EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Update health history
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STATS='${{ steps.stats.outputs.stats }}'
+          TODAY=$(date -u +%Y-%m-%d)
+
+          while IFS= read -r wf; do
+            key=$(echo "$wf" | jq -r '.key')
+            rate=$(echo "$wf" | jq -r '.failure_rate')
+            state_path="workflow-health/$(echo "$key" | tr '/' '-').json"
+
+            # Read existing
+            git fetch origin _state --depth=1 2>/dev/null || true
+            existing=$(git show "origin/_state:$state_path" 2>/dev/null || echo '{"daily":{}}')
+
+            # Merge today's rate
+            updated=$(echo "$existing" | jq --arg d "$TODAY" --argjson r "$rate" '.daily[$d] = $r')
+
+            # Write via write-state
+            echo "$updated" > /tmp/health-update.json
+            # (write-state handles the _state branch commit)
+          done < <(echo "$STATS" | jq -c '.[]')
+
+      - name: Aggregate output
+        id: aggregate
+        shell: bash
+        run: |
+          STATS='${{ steps.stats.outputs.stats }}'
+          DEGRADATIONS='${{ steps.degradations.outputs.degradations }}'
+          RUNS='${{ steps.query.outputs.runs }}'
+
+          total_runs=$(echo "$RUNS" | jq 'length')
+          total_failures=$(echo "$RUNS" | jq '[.[] | select(.conclusion == "failure")] | length')
+
+          if [ "$total_runs" -gt 0 ]; then
+            failure_rate=$(( (total_failures * 100) / total_runs ))
+          else
+            failure_rate=0
+          fi
+
+          result=$(jq -n \
+            --argjson total "$total_runs" \
+            --argjson failures "$total_failures" \
+            --argjson rate "$failure_rate" \
+            --argjson workflows "$STATS" \
+            --argjson degradations "$DEGRADATIONS" \
+            --arg date "$(date -u +%Y-%m-%d)" \
+            '{
+              date: $date,
+              total_runs: $total,
+              total_failures: $failures,
+              failure_rate: $rate,
+              workflows: $workflows,
+              degradations: $degradations
+            }')
+
+          {
+            echo "stats<<EVOLVECI_EOF"
+            echo "$result"
+            echo "EVOLVECI_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+  synthesize:
+    needs: collect
+    if: needs.collect.outputs.stats != '' && needs.collect.outputs.stats != '{}'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      result: ${{ steps.ai.outputs.result }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: AI synthesis
+        id: ai
+        uses: your-org/openCI/.github/workflows/claude-harness.yml@v2
+        with:
+          task: "daily-report"
+          prompt-path: "prompts/observability/daily-report.md"
+          model: "claude-haiku-4-5-20251001"
+          max-turns: 1
+          context: ${{ needs.collect.outputs.stats }}
+        secrets:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  publish:
+    needs: synthesize
+    if: needs.synthesize.outputs.result != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@<SHA>
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Write report
+        shell: bash
+        run: |
+          echo '${{ needs.synthesize.outputs.result }}' > /tmp/daily-report.md
+
+      - name: Post issue report
+        uses: ./actions/observability/publishers/post-issue-report
+        with:
+          title: "CI Health Report - $(date -u +%Y-%m-%d)"
+          report-path: /tmp/daily-report.md
+          labels: "daily-report,ci-health"
+
+      - name: Post Slack report
+        continue-on-error: true
+        uses: ./actions/observability/publishers/post-slack-report
+        with:
+          webhook-url: ${{ secrets.SLACK_CI_WEBHOOK }}
+          title: "CI Health Report - $(date -u +%Y-%m-%d)"
+          message: ${{ needs.synthesize.outputs.result }}
+          status: info

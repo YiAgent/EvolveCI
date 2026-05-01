@@ -1,0 +1,206 @@
+name: "CI Health - Weekly Deep Dive"
+
+on:
+  schedule:
+    - cron: "0 2 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-health-weekly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      weekly-data: ${{ steps.aggregate.outputs.weekly-data }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@<SHA>
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Load onboarded repos
+        id: repos
+        shell: bash
+        run: |
+          repos=$(yq -r '.repos[].name' data/onboarded-repos.yml | paste -sd, -)
+          echo "repos=$repos" >> "$GITHUB_OUTPUT"
+
+      - name: Query GitHub Actions
+        id: query
+        uses: ./actions/observability/sources/query-github-actions
+        with:
+          repos: ${{ steps.repos.outputs.repos }}
+          since: "7d"
+          status: all
+          include-logs: "false"
+          token: ${{ secrets.CROSS_REPO_PAT }}
+
+      - name: Compute weekly stats
+        id: stats
+        shell: bash
+        run: |
+          RUNS='${{ steps.query.outputs.runs }}'
+
+          # Group by repo
+          repo_stats=$(echo "$RUNS" | jq '
+            group_by(.repo) |
+            map({
+              repo: .[0].repo,
+              total: length,
+              failed: [.[] | select(.conclusion == "failure")] | length,
+              success: [.[] | select(.conclusion == "success")] | length,
+              workflows: (
+                group_by(.workflowName) |
+                map({
+                  name: .[0].workflowName,
+                  total: length,
+                  failed: [.[] | select(.conclusion == "failure")] | length,
+                  failure_rate: (if length > 0 then (([.[] | select(.conclusion == "failure")] | length) * 100 / length | floor) else 0 end)
+                })
+              )
+            })
+          ')
+
+          echo "repo_stats<<EVOLVECI_EOF" >> "$GITHUB_OUTPUT"
+          echo "$repo_stats" >> "$GITHUB_OUTPUT"
+          echo "EVOLVECI_EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Read previous snapshot
+        id: previous
+        shell: bash
+        run: |
+          # Get last week's ISO week number
+          last_week=$(date -u -d "7 days ago" +%Y-W%V 2>/dev/null || date -u -v-7d +%Y-W%V 2>/dev/null || echo "")
+          this_week=$(date -u +%Y-W%V)
+
+          if [ -n "$last_week" ]; then
+            git fetch origin _state --depth=1 2>/dev/null || true
+            previous=$(git show "origin/_state:weekly-snapshots/$last_week.json" 2>/dev/null || echo "{}")
+          else
+            previous="{}"
+          fi
+
+          echo "this-week=$this_week" >> "$GITHUB_OUTPUT"
+          echo "previous<<EVOLVECI_EOF" >> "$GITHUB_OUTPUT"
+          echo "$previous" >> "$GITHUB_OUTPUT"
+          echo "EVOLVECI_EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Save current snapshot
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          THIS_WEEK="${{ steps.previous.outputs.this-week }}"
+          STATS='${{ steps.stats.outputs.repo_stats }}'
+
+          snapshot=$(jq -n \
+            --arg week "$THIS_WEEK" \
+            --arg date "$(date -u +%Y-%m-%d)" \
+            --argjson repos "$STATS" \
+            '{week: $week, date: $date, repos: $repos}')
+
+          echo "$snapshot" > /tmp/weekly-snapshot.json
+
+          # Write to _state branch
+          git fetch origin _state --depth=1 2>/dev/null || true
+          git checkout -B _state origin/_state 2>/dev/null || {
+            git checkout --orphan _state
+            git rm -rf . 2>/dev/null || true
+            git commit --allow-empty -m "init: CI observability state branch"
+          }
+
+          mkdir -p weekly-snapshots
+          echo "$snapshot" > "weekly-snapshots/$THIS_WEEK.json"
+          git add "weekly-snapshots/$THIS_WEEK.json"
+          git -c user.name="evolveCI bot" -c user.email="bot@evolveci.dev" \
+            commit -m "state: add weekly snapshot $THIS_WEEK" || true
+          git push origin _state 2>/dev/null || echo "::warning::Failed to push weekly snapshot"
+
+          git checkout - 2>/dev/null || true
+
+      - name: Aggregate output
+        id: aggregate
+        shell: bash
+        run: |
+          current=$(jq -n \
+            --arg week "${{ steps.previous.outputs.this-week }}" \
+            --arg date "$(date -u +%Y-%m-%d)" \
+            --argjson repos '${{ steps.stats.outputs.repo_stats }}' \
+            '{week: $week, date: $date, repos: $repos}')
+
+          {
+            echo "weekly-data<<EVOLVECI_EOF"
+            jq -n \
+              --argjson current "$current" \
+              --argjson previous '${{ steps.previous.outputs.previous }}' \
+              '{current: $current, previous: $previous}'
+            echo "EVOLVECI_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+  synthesize:
+    needs: collect
+    if: needs.collect.outputs.weekly-data != '' && needs.collect.outputs.weekly-data != '{}'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      result: ${{ steps.ai.outputs.result }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: AI synthesis
+        id: ai
+        uses: your-org/openCI/.github/workflows/claude-harness.yml@v2
+        with:
+          task: "weekly-deep-dive"
+          prompt-path: "prompts/observability/weekly-deep-dive.md"
+          model: "claude-sonnet-4-20250514"
+          max-turns: 1
+          context: ${{ needs.collect.outputs.weekly-data }}
+        secrets:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  publish:
+    needs: synthesize
+    if: needs.synthesize.outputs.result != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@<SHA>
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Write report
+        shell: bash
+        run: |
+          echo '${{ needs.synthesize.outputs.result }}' > /tmp/weekly-report.md
+
+      - name: Post issue report
+        uses: ./actions/observability/publishers/post-issue-report
+        with:
+          title: "CI Weekly Deep Dive - $(date -u +%Y-W%V)"
+          report-path: /tmp/weekly-report.md
+          labels: "weekly-report,ci-health"
+
+      - name: Post Slack report
+        continue-on-error: true
+        uses: ./actions/observability/publishers/post-slack-report
+        with:
+          webhook-url: ${{ secrets.SLACK_CI_WEBHOOK }}
+          title: "CI Weekly Deep Dive - $(date -u +%Y-W%V)"
+          message: ${{ needs.synthesize.outputs.result }}
+          status: info

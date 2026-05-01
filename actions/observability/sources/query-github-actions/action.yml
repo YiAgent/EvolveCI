@@ -1,0 +1,131 @@
+name: "Query GitHub Actions"
+description: "Fetch workflow runs from multiple repos within a time window. Optionally include failure logs."
+
+inputs:
+  repos:
+    description: "Comma-separated list of org/repo"
+    required: true
+  since:
+    description: "Time window (e.g. 30m, 24h, 7d)"
+    required: true
+  status:
+    description: "Filter by status: all, failure, success"
+    required: false
+    default: "all"
+  include-logs:
+    description: "Whether to fetch failure job logs"
+    required: false
+    default: "false"
+  log-tail:
+    description: "Number of tail lines to fetch per failure"
+    required: false
+    default: "100"
+  token:
+    description: "Fine-grained PAT with actions:read"
+    required: true
+
+outputs:
+  runs:
+    description: "JSON array of run objects"
+    value: ${{ steps.query.outputs.runs }}
+  count:
+    description: "Total run count"
+    value: ${{ steps.query.outputs.count }}
+  failure-count:
+    description: "Failure run count"
+    value: ${{ steps.query.outputs.failure-count }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: query
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+
+        IFS=',' read -ra REPOS <<< "${{ inputs.repos }}"
+        SINCE="${{ inputs.since }}"
+        STATUS="${{ inputs.status }}"
+        INCLUDE_LOGS="${{ inputs.include-logs }}"
+        LOG_TAIL="${{ inputs.log-tail }}"
+
+        # Parse since into gh-compatible date
+        now_epoch=$(date +%s)
+        case "$SINCE" in
+          *m) delta=$(( ${SINCE%m} * 60 )) ;;
+          *h) delta=$(( ${SINCE%h} * 3600 )) ;;
+          *d) delta=$(( ${SINCE%d} * 86400 )) ;;
+          *)  echo "::error::Invalid since format: $SINCE"; exit 1 ;;
+        esac
+        since_date=$(date -u -d "@$((now_epoch - delta))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
+                     date -u -r "$((now_epoch - delta))" +%Y-%m-%dT%H:%M:%SZ)
+
+        all_runs="[]"
+        failure_total=0
+
+        for repo in "${REPOS[@]}"; do
+          repo=$(echo "$repo" | xargs)
+          [ -z "$repo" ] && continue
+
+          echo "::group::Querying $repo"
+
+          # Fetch runs
+          runs_json=$(gh run list \
+            --repo "$repo" \
+            --limit 100 \
+            --json databaseId,name,conclusion,createdAt,updatedAt,event,headBranch,headSha,actor,workflowName \
+            --created ">=${since_date}" \
+            2>/dev/null || echo "[]")
+
+          # Inject repo field
+          runs_json=$(echo "$runs_json" | jq --arg repo "$repo" '[.[] | . + {repo: $repo}]')
+
+          # Filter by status
+          if [ "$STATUS" != "all" ]; then
+            runs_json=$(echo "$runs_json" | jq --arg s "$STATUS" '[.[] | select(.conclusion == $s)]')
+          fi
+
+          # Optionally fetch failure logs
+          if [ "$INCLUDE_LOGS" = "true" ]; then
+            failed_runs=$(echo "$runs_json" | jq '[.[] | select(.conclusion == "failure")]')
+            enriched="[]"
+
+            while IFS= read -r run_id; do
+              [ -z "$run_id" ] && continue
+              log_output=$(gh run view "$run_id" --repo "$repo" --log-failed 2>/dev/null | tail -n "$LOG_TAIL" | base64 -w0 2>/dev/null || echo "")
+
+              failed_jobs=$(gh run view "$run_id" --repo "$repo" --json jobs 2>/dev/null | \
+                jq '[.jobs[] | select(.conclusion == "failure") | {name: .name, steps: [.steps[] | select(.conclusion == "failure") | .name]}]' 2>/dev/null || echo "[]")
+
+              enriched=$(echo "$enriched" | jq --argjson id "$run_id" --arg log "$log_output" --argjson jobs "$failed_jobs" \
+                '. + [{id: $id, log_base64: $log, failed_jobs: $jobs}]')
+            done < <(echo "$failed_runs" | jq -r '.[].databaseId')
+
+            # Merge log data back
+            runs_json=$(echo "$runs_json" | jq --argjson logs "$enriched" '
+              [.[] | . as $run | ($logs[] | select(.id == ($run.databaseId | tostring))) as $log |
+               if $log then . + {log_base64: $log.log_base64, failed_jobs: $log.failed_jobs} else . end]')
+          fi
+
+          all_runs=$(echo "$all_runs $runs_json" | jq -s '.[0] + .[1]')
+
+          repo_failures=$(echo "$runs_json" | jq '[.[] | select(.conclusion == "failure")] | length')
+          failure_total=$((failure_total + repo_failures))
+
+          echo "::endgroup::"
+        done
+
+        total=$(echo "$all_runs" | jq 'length')
+
+        # Write outputs using EOF heredoc to handle special characters
+        {
+          echo "runs<<EVOLVECI_EOF"
+          echo "$all_runs" | jq -c .
+          echo "EVOLVECI_EOF"
+          echo "count=$total"
+          echo "failure-count=$failure_total"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "::notice::Found $total runs ($failure_total failures)"

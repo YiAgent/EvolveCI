@@ -1,0 +1,71 @@
+name: "Trip Circuit Breaker"
+description: "Create issue and notify when budget dimension is exceeded."
+
+inputs:
+  repo:
+    description: "Repository name"
+    required: true
+  workflow-name:
+    description: "Workflow name"
+    required: true
+  reason:
+    description: "Reason for tripping"
+    required: true
+  dimension:
+    description: "Budget dimension: workflow, pattern, repo"
+    required: true
+  history:
+    description: "JSON array of recent history"
+    required: false
+    default: "[]"
+
+runs:
+  using: "composite"
+  steps:
+    - id: trip
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+
+        REPO="${{ inputs.repo }}"
+        WORKFLOW="${{ inputs.workflow-name }}"
+        REASON="${{ inputs.reason }}"
+        DIMENSION="${{ inputs.dimension }}"
+        HISTORY='${{ inputs.history }}'
+
+        TITLE="[Circuit Breaker] $REPO/$WORKFLOW - $DIMENSION budget exceeded"
+
+        BODY=$(cat <<EOF
+## Circuit Breaker Tripped
+
+- **Repository**: $REPO
+- **Workflow**: $WORKFLOW
+- **Dimension**: $DIMENSION
+- **Reason**: $REASON
+
+### Recent History
+
+\`\`\`json
+$HISTORY
+\`\`\`
+
+### Recovery
+
+Remove the \`ci:circuit-broken\` label from this issue to resume auto-triage.
+
+---
+_Automated by evolveCI_
+EOF
+        )
+
+        # Create issue
+        gh issue create \
+          --repo "$REPO" \
+          --title "$TITLE" \
+          --body "$BODY" \
+          --label "ci:circuit-broken,severity/critical" \
+          2>/dev/null || echo "::warning::Failed to create issue"
+
+        echo "::error::Circuit breaker tripped: $DIMENSION budget exceeded for $REPO/$WORKFLOW"

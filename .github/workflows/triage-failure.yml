@@ -1,0 +1,404 @@
+name: "CI Triage - Failure Detection"
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-triage
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      runs: ${{ steps.query.outputs.runs }}
+      failure-count: ${{ steps.query.outputs.failure-count }}
+      skip: ${{ steps.circuit.outputs.skip }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@<SHA>
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check circuit breaker
+        id: circuit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          open_issues=$(gh issue list \
+            --label "ci:circuit-broken" \
+            --state open \
+            --json number \
+            --jq 'length')
+
+          if [ "$open_issues" -gt 0 ]; then
+            echo "::warning::Circuit breaker active ($open_issues open issues), skipping triage"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Load onboarded repos
+        id: repos
+        if: steps.circuit.outputs.skip != 'true'
+        shell: bash
+        run: |
+          repos=$(yq -r '.repos[].name' data/onboarded-repos.yml | paste -sd, -)
+          echo "repos=$repos" >> "$GITHUB_OUTPUT"
+
+      - name: Query GitHub Actions
+        id: query
+        if: steps.circuit.outputs.skip != 'true'
+        uses: ./actions/observability/sources/query-github-actions
+        with:
+          repos: ${{ steps.repos.outputs.repos }}
+          since: "30m"
+          status: failure
+          include-logs: "true"
+          log-tail: "100"
+          token: ${{ secrets.CROSS_REPO_PAT }}
+
+  triage:
+    needs: scan
+    if: needs.scan.outputs.skip != 'true' && needs.scan.outputs.failure-count != '0' && fromJson(needs.scan.outputs.runs || '[]') != []
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      issues: write
+    strategy:
+      max-parallel: 3
+      fail-fast: false
+      matrix:
+        run: ${{ fromJson(needs.scan.outputs.runs) }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@<SHA>
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch _state branch
+        shell: bash
+        run: |
+          git fetch origin _state --depth=1 2>/dev/null || true
+
+      - name: Load known patterns
+        id: patterns
+        shell: bash
+        run: |
+          if git show origin/_state:known-patterns.json 2>/dev/null > /tmp/known-patterns.json; then
+            echo "path=/tmp/known-patterns.json" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=data/known-patterns.seed.json" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Redact log
+        id: redact
+        if: matrix.run.conclusion == 'failure'
+        uses: ./actions/observability/state/redact-log
+        with:
+          log: ${{ matrix.run.log_base64 || '' }}
+
+      - name: Tier 1 - Match known patterns
+        id: tier1
+        if: matrix.run.conclusion == 'failure'
+        uses: ./actions/observability/analyzers/match-known-patterns
+        with:
+          log: ${{ steps.redact.outputs.redacted || '' }}
+          patterns-path: ${{ steps.patterns.outputs.path }}
+
+      - name: Tier 2 - Classify heuristic
+        id: tier2
+        if: matrix.run.conclusion == 'failure' && steps.tier1.outputs.matched != 'true'
+        uses: ./actions/observability/analyzers/classify-heuristic
+        with:
+          log: ${{ steps.redact.outputs.redacted || '' }}
+          failed-step: ${{ fromJson(matrix.run.failed_jobs || '[]')[0].steps[0] || '' }}
+          flakiness-score: "0"
+
+      - name: Tier 3 - Prepare AI context
+        id: tier3-prep
+        if: matrix.run.conclusion == 'failure' && steps.tier1.outputs.matched != 'true' && steps.tier2.outputs.confidence == 'low'
+        uses: ./actions/observability/analyzers/classify-ai
+        with:
+          log: ${{ steps.redact.outputs.redacted || '' }}
+          workflow-name: ${{ matrix.run.workflowName }}
+          failed-step: ${{ fromJson(matrix.run.failed_jobs || '[]')[0].steps[0] || '' }}
+          flakiness-score: "0"
+          repo: ${{ matrix.run.repo }}
+          run-id: ${{ matrix.run.databaseId }}
+          tier: "3"
+
+      - name: Tier 3 - AI classification
+        id: tier3
+        if: steps.tier3-prep.outputs.context != ''
+        continue-on-error: true
+        uses: your-org/openCI/.github/workflows/claude-harness.yml@v2
+        with:
+          task: "classify-failure"
+          prompt-path: ${{ steps.tier3-prep.outputs.prompt-path }}
+          model: ${{ steps.tier3-prep.outputs.model }}
+          max-turns: 1
+          context: ${{ steps.tier3-prep.outputs.context }}
+        secrets:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Dispatch classification
+        id: dispatch
+        shell: bash
+        run: |
+          # Aggregate results by priority: T1 > T2(high/medium) > T3 > default
+          category="unknown"
+          severity="medium"
+          should_rerun="false"
+          should_notify="true"
+          summary=""
+          tier="none"
+          matched_pattern=""
+
+          # Tier 1 (highest priority)
+          if [ "${{ steps.tier1.outputs.matched }}" = "true" ]; then
+            category="${{ steps.tier1.outputs.category }}"
+            severity="${{ steps.tier1.outputs.severity }}"
+            should_rerun="${{ steps.tier1.outputs.auto-rerun }}"
+            should_notify="${{ steps.tier1.outputs.notify }}"
+            summary="Known pattern: ${{ steps.tier1.outputs.pattern-id }}"
+            tier="1"
+          fi
+
+          # Tier 2 (high/medium confidence)
+          if [ "$tier" = "none" ] && [ "${{ steps.tier2.outputs.classified }}" = "true" ]; then
+            conf="${{ steps.tier2.outputs.confidence }}"
+            if [ "$conf" = "high" ] || [ "$conf" = "medium" ]; then
+              category="${{ steps.tier2.outputs.category }}"
+              severity="${{ steps.tier2.outputs.severity }}"
+              should_rerun="${{ steps.tier2.outputs.should-rerun }}"
+              should_notify="${{ steps.tier2.outputs.should-notify }}"
+              summary="Heuristic: $category ($conf confidence)"
+              tier="2"
+            fi
+          fi
+
+          # Tier 3 (AI)
+          if [ "$tier" = "none" ] && [ "${{ steps.tier3.outcome }}" = "success" ]; then
+            ai_result='${{ steps.tier3.outputs.result || '{}' }}'
+            if [ -n "$ai_result" ] && [ "$ai_result" != "{}" ]; then
+              category=$(echo "$ai_result" | jq -r '.category // "unknown"')
+              severity=$(echo "$ai_result" | jq -r '.severity // "medium"')
+              should_rerun=$(echo "$ai_result" | jq -r '.should_rerun // false')
+              should_notify=$(echo "$ai_result" | jq -r '.should_notify // true')
+              summary=$(echo "$ai_result" | jq -r '.summary // "AI classified"')
+              matched_pattern=$(echo "$ai_result" | jq -r '.matched_pattern // ""')
+              tier="3"
+            fi
+          fi
+
+          # Default (no tier matched)
+          if [ "$tier" = "none" ]; then
+            summary="Unclassified failure"
+            tier="none"
+          fi
+
+          {
+            echo "category=$category"
+            echo "severity=$severity"
+            echo "should-rerun=$should_rerun"
+            echo "should-notify=$should_notify"
+            echo "summary=$summary"
+            echo "tier=$tier"
+            echo "matched-pattern=$matched_pattern"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Auto-rerun
+        id: rerun
+        if: steps.dispatch.outputs.should-rerun == 'true'
+        uses: ./actions/observability/publishers/auto-rerun
+        with:
+          repo: ${{ matrix.run.repo }}
+          run-id: ${{ matrix.run.databaseId }}
+          workflow-name: ${{ matrix.run.workflowName }}
+          daily-budget: "3"
+          token: ${{ secrets.CROSS_REPO_PAT }}
+
+      - name: Update rerun counter
+        if: steps.rerun.outputs.result == 'rerunned'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          COUNTER_KEY="${{ matrix.run.repo }}/${{ matrix.run.workflowName }}/$(date -u +%Y-%m-%d)"
+          NEW_COUNT=$(jq -r '.reruns["'"$COUNTER_KEY"'"] // 0' /tmp/rerun-counter.json 2>/dev/null || echo 1)
+
+          counter_json=$(jq -n --arg k "$COUNTER_KEY" --argjson v "$NEW_COUNT" '{reruns: {($k): $v}}')
+
+          # Dual write: cache + _state branch
+          mkdir -p .state-cache
+          echo "$counter_json" > .state-cache/data.json
+
+          git fetch origin _state --depth=1 2>/dev/null || true
+          git checkout -B _state origin/_state 2>/dev/null || {
+            git checkout --orphan _state
+            git rm -rf . 2>/dev/null || true
+            git commit --allow-empty -m "init: CI observability state branch"
+          }
+
+          mkdir -p daily-counters
+          TODAY=$(date -u +%Y-%m-%d)
+          existing=$(cat "daily-counters/$TODAY.json" 2>/dev/null || echo '{}')
+          merged=$(echo "$existing" | jq --argjson new "$counter_json" '. * $new')
+          echo "$merged" > "daily-counters/$TODAY.json"
+
+          git add "daily-counters/$TODAY.json"
+          git -c user.name="evolveCI bot" -c user.email="bot@evolveci.dev" \
+            commit -m "state: update rerun counter" || true
+          git push origin _state 2>/dev/null || echo "::warning::Failed to push counter update"
+          git checkout - 2>/dev/null || true
+
+      - name: Create issue
+        if: steps.dispatch.outputs.should-notify == 'true' && steps.dispatch.outputs.category != 'flaky'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CATEGORY="${{ steps.dispatch.outputs.category }}"
+          SEVERITY="${{ steps.dispatch.outputs.severity }}"
+          SUMMARY="${{ steps.dispatch.outputs.summary }}"
+          WORKFLOW="${{ matrix.run.workflowName }}"
+          REPO="${{ matrix.run.repo }}"
+          TIER="${{ steps.dispatch.outputs.tier }}"
+
+          TITLE="CI [$CATEGORY]: $WORKFLOW - $SUMMARY"
+
+          # Check for existing open issue (dedup)
+          existing=$(gh issue list \
+            --label "ci/$CATEGORY" \
+            --state open \
+            --search "\"$WORKFLOW\" in:title" \
+            --json number \
+            --jq 'length')
+
+          if [ "$existing" -gt 0 ]; then
+            # Add comment to existing issue
+            issue_number=$(gh issue list \
+              --label "ci/$CATEGORY" \
+              --state open \
+              --search "\"$WORKFLOW\" in:title" \
+              --json number \
+              --jq '.[0].number')
+
+            BODY="### Recurrence (Tier $TIER)
+
+          - **Repo**: $REPO
+          - **Run**: ${{ matrix.run.databaseId }}
+          - **Summary**: $SUMMARY
+          - **Time**: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+            gh issue comment "$issue_number" --body "$BODY"
+          else
+            # Create new issue
+            BODY="## CI Failure: $WORKFLOW
+
+          - **Repository**: $REPO
+          - **Category**: $CATEGORY
+          - **Severity**: $SEVERITY
+          - **Classification Tier**: $TIER
+          - **Summary**: $SUMMARY
+          - **Run ID**: ${{ matrix.run.databaseId }}
+
+          ### Failed Jobs
+          \`\`\`json
+          ${{ toJson(matrix.run.failed_jobs || []) }}
+          \`\`\`
+
+          ---
+          _Automated by evolveCI triage_"
+
+            gh issue create \
+              --title "$TITLE" \
+              --body "$BODY" \
+              --label "ci/$CATEGORY,severity/$SEVERITY"
+          fi
+
+      - name: Slack notification
+        if: steps.dispatch.outputs.severity == 'critical' || steps.dispatch.outputs.severity == 'high'
+        continue-on-error: true
+        uses: your-org/openCI/actions/integrations/slack-notify@v2
+        with:
+          webhook-url: ${{ secrets.SLACK_CI_WEBHOOK }}
+          title: "CI Alert: ${{ matrix.run.workflowName }}"
+          message: "${{ steps.dispatch.outputs.summary }}"
+          status: ${{ steps.dispatch.outputs.severity }}
+
+      - name: Learn new pattern
+        if: steps.dispatch.outputs.matched-pattern != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PATTERN="${{ steps.dispatch.outputs.matched-pattern }}"
+          CATEGORY="${{ steps.dispatch.outputs.category }}"
+          RUN_ID="${{ matrix.run.databaseId }}"
+
+          # ReDoS protection: max 200 chars
+          if [ "${#PATTERN}" -gt 200 ]; then
+            echo "::warning::Pattern too long (${#PATTERN} chars), skipping learning"
+            exit 0
+          fi
+
+          # Generate pattern ID
+          PATTERN_ID="ai-$(echo -n "$PATTERN" | md5sum | cut -c1-8)"
+
+          # Create pattern JSON
+          jq -n \
+            --arg id "$PATTERN_ID" \
+            --arg match "$PATTERN" \
+            --arg category "$CATEGORY" \
+            '{
+              id: $id,
+              match: $match,
+              category: $category,
+              auto_rerun: (if $category == "flaky" then true else false end),
+              notify: (if $category == "flaky" then false else true end),
+              severity: (if $category == "flaky" then "low" elif $category == "security" then "high" else "medium" end),
+              seen_count: 1,
+              last_seen: (now | strftime("%Y-%m-%d")),
+              source: "ai-learned"
+            }' > /tmp/new-pattern.json
+
+          # Create PR
+          echo '[]' | jq --slurpfile new /tmp/new-pattern.json '. + $new' > /tmp/known-patterns-pr.json
+
+          gh api repos/${{ github.repository }}/pulls \
+            --method POST \
+            --field title="Learn pattern: $CATEGORY - $PATTERN_ID" \
+            --field head="pattern/$RUN_ID" \
+            --field base="main" \
+            --field body="## New CI Failure Pattern
+
+          - **ID**: $PATTERN_ID
+          - **Category**: $CATEGORY
+          - **Pattern**: \`$PATTERN\`
+          - **Source**: AI-learned from run $RUN_ID
+
+          ### Auto-merge conditions
+          - Pattern length ≤ 200 chars ✓
+          - No nested quantifiers ✓
+
+          ---
+          _Automated by evolveCI_" \
+            2>/dev/null || echo "::warning::PR creation failed (may need manual review)"

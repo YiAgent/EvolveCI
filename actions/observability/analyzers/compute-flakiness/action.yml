@@ -1,0 +1,73 @@
+name: "Compute Flakiness"
+description: "Compute flakiness score based on recent N runs."
+
+inputs:
+  repo:
+    description: "Repository name (org/repo)"
+    required: true
+  workflow-name:
+    description: "Workflow name"
+    required: true
+  lookback:
+    description: "Number of recent runs to analyze"
+    required: false
+    default: "20"
+  token:
+    description: "GitHub token"
+    required: true
+
+outputs:
+  flakiness-score:
+    description: "Flakiness score (0-100)"
+    value: ${{ steps.compute.outputs.flakiness-score }}
+  total-runs:
+    description: "Total runs analyzed"
+    value: ${{ steps.compute.outputs.total-runs }}
+  failed-runs:
+    description: "Number of failed runs"
+    value: ${{ steps.compute.outputs.failed-runs }}
+  recent-conclusions:
+    description: "JSON array of last 5 conclusions"
+    value: ${{ steps.compute.outputs.recent-conclusions }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: compute
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+
+        REPO="${{ inputs.repo }}"
+        WORKFLOW="${{ inputs.workflow-name }}"
+        LOOKBACK="${{ inputs.lookback }}"
+
+        # Fetch recent runs
+        runs=$(gh run list \
+          --repo "$REPO" \
+          --workflow "$WORKFLOW" \
+          --limit "$LOOKBACK" \
+          --json conclusion \
+          2>/dev/null || echo "[]")
+
+        total=$(echo "$runs" | jq 'length')
+        failed=$(echo "$runs" | jq '[.[] | select(.conclusion == "failure")] | length')
+
+        if [ "$total" -eq 0 ]; then
+          score=0
+        else
+          score=$(( (failed * 100) / total ))
+        fi
+
+        recent=$(echo "$runs" | jq -c '[.[0:5][] | .conclusion]')
+
+        {
+          echo "flakiness-score=$score"
+          echo "total-runs=$total"
+          echo "failed-runs=$failed"
+          echo "recent-conclusions=$recent"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "::notice::Flakiness: $score% ($failed/$total failures in last $LOOKBACK runs)"

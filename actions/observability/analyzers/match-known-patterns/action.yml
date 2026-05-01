@@ -1,0 +1,78 @@
+name: "Match Known Patterns"
+description: "Tier 1: Match log against known-patterns.json using regex. Zero AI cost."
+
+inputs:
+  log:
+    description: "Plaintext log (already redacted)"
+    required: true
+  patterns-path:
+    description: "Path to known-patterns.json"
+    required: false
+    default: "known-patterns.json"
+
+outputs:
+  matched:
+    description: "Whether a pattern was matched"
+    value: ${{ steps.match.outputs.matched }}
+  pattern-id:
+    description: "ID of the matched pattern"
+    value: ${{ steps.match.outputs.pattern-id }}
+  category:
+    description: "Failure category"
+    value: ${{ steps.match.outputs.category }}
+  auto-rerun:
+    description: "Whether to auto-rerun"
+    value: ${{ steps.match.outputs.auto-rerun }}
+  notify:
+    description: "Whether to notify"
+    value: ${{ steps.match.outputs.notify }}
+  severity:
+    description: "Severity level"
+    value: ${{ steps.match.outputs.severity }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: match
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        LOG='${{ inputs.log }}'
+        PATTERNS_PATH="${{ inputs.patterns-path }}"
+
+        if [ -z "$LOG" ]; then
+          echo "matched=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        if [ ! -f "$PATTERNS_PATH" ]; then
+          echo "::warning::Patterns file not found: $PATTERNS_PATH"
+          echo "matched=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # Stream through patterns with jq, test each with grep
+        while IFS= read -r pattern_json; do
+          id=$(echo "$pattern_json" | jq -r '.id')
+          match_re=$(echo "$pattern_json" | jq -r '.match')
+          category=$(echo "$pattern_json" | jq -r '.category')
+          auto_rerun=$(echo "$pattern_json" | jq -r '.auto_rerun')
+          notify=$(echo "$pattern_json" | jq -r '.notify')
+          severity=$(echo "$pattern_json" | jq -r '.severity')
+
+          if echo "$LOG" | grep -qE "$match_re" 2>/dev/null; then
+            echo "::notice::Matched pattern: $id ($category)"
+            {
+              echo "matched=true"
+              echo "pattern-id=$id"
+              echo "category=$category"
+              echo "auto-rerun=$auto_rerun"
+              echo "notify=$notify"
+              echo "severity=$severity"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+        done < <(jq -c '.[]' "$PATTERNS_PATH")
+
+        echo "matched=false" >> "$GITHUB_OUTPUT"

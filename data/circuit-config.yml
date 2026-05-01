@@ -1,0 +1,16 @@
+dimensions:
+  workflow:
+    daily_limit: 3
+    description: "Same workflow in same repo"
+  pattern:
+    daily_limit: 5
+    description: "Same failure pattern across all repos"
+  repo:
+    daily_limit: 20
+    description: "All reruns in a single repo"
+
+no_rerun:
+  - "deploy"
+  - "security"
+  - "scan"
+  - "sign"

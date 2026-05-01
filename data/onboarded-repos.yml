@@ -1,0 +1,15 @@
+repos:
+  - name: org/repo-a
+    workflows: "*"
+    priority: high
+
+  - name: org/repo-b
+    workflows: "pr.yml,ci.yml"
+    priority: low
+
+  - name: org/repo-c
+    workflows: "*"
+    priority: high
+    exclude:
+      - "stale.yml"
+      - "community.yml"

@@ -1,0 +1,55 @@
+name: "Post Issue Report"
+description: "Create a GitHub Issue from a markdown file."
+
+inputs:
+  title:
+    description: "Issue title"
+    required: true
+  report-path:
+    description: "Path to markdown report file"
+    required: true
+  labels:
+    description: "Comma-separated labels"
+    required: false
+    default: "ci-report"
+  assignees:
+    description: "Comma-separated assignees"
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - id: create
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+
+        TITLE="${{ inputs.title }}"
+        REPORT_PATH="${{ inputs.report-path }}"
+        LABELS="${{ inputs.labels }}"
+        ASSIGNEES="${{ inputs.assignees }}"
+
+        if [ ! -f "$REPORT_PATH" ]; then
+          echo "::error::Report file not found: $REPORT_PATH"
+          exit 1
+        fi
+
+        args=(
+          --title "$TITLE"
+          --body-file "$REPORT_PATH"
+        )
+
+        if [ -n "$LABELS" ]; then
+          args+=(--label "$LABELS")
+        fi
+
+        if [ -n "$ASSIGNEES" ]; then
+          args+=(--assignee "$ASSIGNEES")
+        fi
+
+        gh issue create "${args[@]}" 2>/dev/null
+
+        echo "::notice::Created issue: $TITLE"
