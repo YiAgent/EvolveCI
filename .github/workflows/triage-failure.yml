@@ -146,6 +146,16 @@ jobs:
           log: ${{ steps.redact.outputs.redacted || '' }}
           patterns-path: ${{ steps.patterns.outputs.path }}
 
+      - name: Compute flakiness score
+        id: flakiness
+        if: matrix.run.conclusion == 'failure'
+        uses: ./actions/observability/analyzers/compute-flakiness
+        with:
+          repo: ${{ matrix.run.repo }}
+          workflow-name: ${{ matrix.run.workflowName }}
+          lookback: "20"
+          token: ${{ secrets.CROSS_REPO_PAT }}
+
       - name: Tier 2 - Classify heuristic
         id: tier2
         if: matrix.run.conclusion == 'failure' && steps.tier1.outputs.matched != 'true'
@@ -153,7 +163,7 @@ jobs:
         with:
           log: ${{ steps.redact.outputs.redacted || '' }}
           failed-step: ${{ fromJson(matrix.run.failed_jobs || '[]')[0].steps[0] || '' }}
-          flakiness-score: "0"
+          flakiness-score: ${{ steps.flakiness.outputs.flakiness-score || '0' }}
 
       - name: Tier 3 - Prepare AI context
         id: tier3-prep
@@ -257,40 +267,91 @@ jobs:
           daily-budget: "3"
           token: ${{ secrets.CROSS_REPO_PAT }}
 
+      - name: Read rerun counter
+        id: read-counter
+        if: steps.rerun.outputs.result == 'rerunned'
+        uses: ./actions/observability/state/read-state
+        with:
+          key: "reruns:${{ matrix.run.repo }}/${{ matrix.run.workflowName }}"
+          state-path: "daily-counters/$(date -u +%Y-%m-%d).json"
+          default: '{"reruns":{}}'
+
       - name: Update rerun counter
+        id: update-counter
         if: steps.rerun.outputs.result == 'rerunned'
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          COUNTER_KEY="${{ matrix.run.repo }}/${{ matrix.run.workflowName }}/$(date -u +%Y-%m-%d)"
-          NEW_COUNT=$(jq -r '.reruns["'"$COUNTER_KEY"'"] // 0' /tmp/rerun-counter.json 2>/dev/null || echo 1)
-
-          counter_json=$(jq -n --arg k "$COUNTER_KEY" --argjson v "$NEW_COUNT" '{reruns: {($k): $v}}')
-
-          # Dual write: cache + _state branch
-          mkdir -p .state-cache
-          echo "$counter_json" > .state-cache/data.json
-
-          git fetch origin _state --depth=1 2>/dev/null || true
-          git checkout -B _state origin/_state 2>/dev/null || {
-            git checkout --orphan _state
-            git rm -rf . 2>/dev/null || true
-            git -c user.name="evolveCI bot" -c user.email="bot@evolveci.dev" \
-              commit --allow-empty -m "init: CI observability state branch"
-          }
-
-          mkdir -p daily-counters
           TODAY=$(date -u +%Y-%m-%d)
-          existing=$(cat "daily-counters/$TODAY.json" 2>/dev/null || echo '{}')
-          merged=$(echo "$existing" | jq --argjson new "$counter_json" '. * $new')
-          echo "$merged" > "daily-counters/$TODAY.json"
+          COUNTER_KEY="${{ matrix.run.repo }}/${{ matrix.run.workflowName }}/$TODAY"
+          EXISTING='${{ steps.read-counter.outputs.value }}'
+          NEW_COUNT=$(echo "$EXISTING" | jq -r ".reruns[\"$COUNTER_KEY\"] // 0")
+          NEW_COUNT=$((NEW_COUNT + 1))
 
-          git add "daily-counters/$TODAY.json"
-          git -c user.name="evolveCI bot" -c user.email="bot@evolveci.dev" \
-            commit -m "state: update rerun counter" || true
-          git push origin _state 2>/dev/null || echo "::warning::Failed to push counter update"
-          git checkout - 2>/dev/null || true
+          counter_json=$(echo "$EXISTING" | jq \
+            --arg k "$COUNTER_KEY" \
+            --argjson v "$NEW_COUNT" \
+            '.reruns[$k] = $v')
+
+          {
+            echo "counter-json<<EVOLVECI_EOF"
+            echo "$counter_json"
+            echo "EVOLVECI_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Write rerun counter
+        if: steps.rerun.outputs.result == 'rerunned'
+        uses: ./actions/observability/state/write-state
+        with:
+          key: "reruns:${{ matrix.run.repo }}/${{ matrix.run.workflowName }}"
+          state-path: "daily-counters/$(date -u +%Y-%m-%d).json"
+          value: ${{ steps.update-counter.outputs.counter-json }}
+          merge: "true"
+
+      - name: Check circuit breaker budget
+        id: budget-check
+        if: steps.rerun.outputs.result == 'rerunned'
+        shell: bash
+        run: |
+          TODAY=$(date -u +%Y-%m-%d)
+          COUNTER_KEY="${{ matrix.run.repo }}/${{ matrix.run.workflowName }}/$TODAY"
+          EXISTING='${{ steps.update-counter.outputs.counter-json }}'
+          CURRENT=$(echo "$EXISTING" | jq -r ".reruns[\"$COUNTER_KEY\"] // 0")
+
+          # Load budget limits from circuit-config
+          WORKFLOW_LIMIT=$(python3 -c "import yaml; print(yaml.safe_load(open('data/circuit-config.yml'))['dimensions']['workflow']['daily_limit'])")
+          REPO_LIMIT=$(python3 -c "import yaml; print(yaml.safe_load(open('data/circuit-config.yml'))['dimensions']['repo']['daily_limit'])")
+
+          TRIPPED="false"
+          REASON=""
+
+          # Check workflow dimension
+          if [ "$CURRENT" -ge "$WORKFLOW_LIMIT" ]; then
+            TRIPPED="true"
+            REASON="workflow budget: $CURRENT/$WORKFLOW_LIMIT reruns today"
+          fi
+
+          # Check repo dimension (sum all counters for this repo today)
+          REPO_TOTAL=$(echo "$EXISTING" | jq -r "
+            .reruns | to_entries
+              | map(select(.key | startswith(\"${{ matrix.run.repo }}/\")))
+              | map(.value) | add // 0
+          ")
+          if [ "$REPO_TOTAL" -ge "$REPO_LIMIT" ]; then
+            TRIPPED="true"
+            REASON="repo budget: $REPO_TOTAL/$REPO_LIMIT reruns today"
+          fi
+
+          echo "tripped=$TRIPPED" >> "$GITHUB_OUTPUT"
+          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+
+      - name: Trip circuit breaker
+        if: steps.budget-check.outputs.tripped == 'true'
+        uses: ./actions/observability/publishers/trip-circuit-breaker
+        with:
+          repo: ${{ matrix.run.repo }}
+          workflow-name: ${{ matrix.run.workflowName }}
+          reason: ${{ steps.budget-check.outputs.reason }}
+          dimension: workflow
 
       - name: Create issue
         if: steps.dispatch.outputs.should-notify == 'true' && steps.dispatch.outputs.category != 'flaky'

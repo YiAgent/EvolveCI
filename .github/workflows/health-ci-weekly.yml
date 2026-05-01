@@ -83,66 +83,55 @@ jobs:
           echo "$repo_stats" >> "$GITHUB_OUTPUT"
           echo "EVOLVECI_EOF" >> "$GITHUB_OUTPUT"
 
-      - name: Read previous snapshot
-        id: previous
+      - name: Compute week dates
+        id: dates
         shell: bash
         run: |
-          # Get last week's ISO week number
           last_week=$(date -u -d "7 days ago" +%Y-W%V 2>/dev/null || date -u -v-7d +%Y-W%V 2>/dev/null || echo "")
           this_week=$(date -u +%Y-W%V)
-
-          if [ -n "$last_week" ]; then
-            git fetch origin _state --depth=1 2>/dev/null || true
-            previous=$(git show "origin/_state:weekly-snapshots/$last_week.json" 2>/dev/null || echo "{}")
-          else
-            previous="{}"
-          fi
-
           echo "this-week=$this_week" >> "$GITHUB_OUTPUT"
-          echo "previous<<EVOLVECI_EOF" >> "$GITHUB_OUTPUT"
-          echo "$previous" >> "$GITHUB_OUTPUT"
-          echo "EVOLVECI_EOF" >> "$GITHUB_OUTPUT"
+          echo "last-week=$last_week" >> "$GITHUB_OUTPUT"
+          echo "snapshot-path=weekly-snapshots/$this_week.json" >> "$GITHUB_OUTPUT"
+          echo "previous-path=weekly-snapshots/$last_week.json" >> "$GITHUB_OUTPUT"
 
-      - name: Save current snapshot
+      - name: Read previous snapshot
+        id: previous
+        uses: ./actions/observability/state/read-state
+        with:
+          key: "weekly-snapshot:${{ steps.dates.outputs.last-week }}"
+          state-path: ${{ steps.dates.outputs.previous-path }}
+          default: "{}"
+
+      - name: Build current snapshot
+        id: current-snapshot
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          THIS_WEEK="${{ steps.previous.outputs.this-week }}"
-          STATS='${{ steps.stats.outputs.repo_stats }}'
-
           snapshot=$(jq -n \
-            --arg week "$THIS_WEEK" \
+            --arg week "${{ steps.dates.outputs.this-week }}" \
             --arg date "$(date -u +%Y-%m-%d)" \
-            --argjson repos "$STATS" \
+            --argjson repos '${{ steps.stats.outputs.repo_stats }}' \
             '{week: $week, date: $date, repos: $repos}')
 
-          echo "$snapshot" > /tmp/weekly-snapshot.json
+          {
+            echo "snapshot<<EVOLVECI_EOF"
+            echo "$snapshot"
+            echo "EVOLVECI_EOF"
+          } >> "$GITHUB_OUTPUT"
 
-          # Write to _state branch
-          git fetch origin _state --depth=1 2>/dev/null || true
-          git checkout -B _state origin/_state 2>/dev/null || {
-            git checkout --orphan _state
-            git rm -rf . 2>/dev/null || true
-            git -c user.name="evolveCI bot" -c user.email="bot@evolveci.dev" \
-              commit --allow-empty -m "init: CI observability state branch"
-          }
-
-          mkdir -p weekly-snapshots
-          echo "$snapshot" > "weekly-snapshots/$THIS_WEEK.json"
-          git add "weekly-snapshots/$THIS_WEEK.json"
-          git -c user.name="evolveCI bot" -c user.email="bot@evolveci.dev" \
-            commit -m "state: add weekly snapshot $THIS_WEEK" || true
-          git push origin _state 2>/dev/null || echo "::warning::Failed to push weekly snapshot"
-
-          git checkout - 2>/dev/null || true
+      - name: Save current snapshot
+        uses: ./actions/observability/state/write-state
+        with:
+          key: "weekly-snapshot:${{ steps.dates.outputs.this-week }}"
+          state-path: ${{ steps.dates.outputs.snapshot-path }}
+          value: ${{ steps.current-snapshot.outputs.snapshot }}
+          merge: "false"
 
       - name: Aggregate output
         id: aggregate
         shell: bash
         run: |
           current=$(jq -n \
-            --arg week "${{ steps.previous.outputs.this-week }}" \
+            --arg week "${{ steps.dates.outputs.this-week }}" \
             --arg date "$(date -u +%Y-%m-%d)" \
             --argjson repos '${{ steps.stats.outputs.repo_stats }}' \
             '{week: $week, date: $date, repos: $repos}')
@@ -151,7 +140,7 @@ jobs:
             echo "weekly-data<<EVOLVECI_EOF"
             jq -n \
               --argjson current "$current" \
-              --argjson previous '${{ steps.previous.outputs.previous }}' \
+              --argjson previous '${{ steps.previous.outputs.value }}' \
               '{current: $current, previous: $previous}'
             echo "EVOLVECI_EOF"
           } >> "$GITHUB_OUTPUT"
