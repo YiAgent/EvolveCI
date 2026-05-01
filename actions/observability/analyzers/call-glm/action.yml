@@ -55,15 +55,22 @@ runs:
         RUN_ID=$(echo "$CONTEXT" | jq -r '.run_id // ""')
         LOG_TAIL=$(echo "$CONTEXT" | jq -r '.log_tail // ""')
 
-        # Replace placeholders in prompt
-        PROMPT=$(echo "$PROMPT" | sed \
-          -e "s|{{workflow_name}}|$WORKFLOW_NAME|g" \
-          -e "s|{{failed_step}}|$FAILED_STEP|g" \
-          -e "s|{{flakiness_score}}|$FLAKINESS_SCORE|g" \
-          -e "s|{{repo}}|$REPO|g" \
-          -e "s|{{run_id}}|$RUN_ID|g" \
-          -e "s|{{log_tail}}|$LOG_TAIL|g" \
-          -e "s|{{context}}|$CONTEXT|g")
+        # Replace placeholders in prompt using jq (safe for special chars)
+        PROMPT=$(echo "$PROMPT" | jq -Rs \
+          --arg wn "$WORKFLOW_NAME" \
+          --arg fs "$FAILED_STEP" \
+          --arg fl "$FLAKINESS_SCORE" \
+          --arg rp "$REPO" \
+          --arg ri "$RUN_ID" \
+          --arg lt "$LOG_TAIL" \
+          --arg ctx "$CONTEXT" \
+          'gsub("\\{\\{workflow_name\\}\\}"; $wn) |
+           gsub("\\{\\{failed_step\\}\\}"; $fs) |
+           gsub("\\{\\{flakiness_score\\}\\}"; $fl) |
+           gsub("\\{\\{repo\\}\\}"; $rp) |
+           gsub("\\{\\{run_id\\}\\}"; $ri) |
+           gsub("\\{\\{log_tail\\}\\}"; $lt) |
+           gsub("\\{\\{context\\}\\}"; $ctx)')
 
         # Escape prompt for JSON
         PROMPT_JSON=$(echo "$PROMPT" | jq -Rs .)
