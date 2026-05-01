@@ -190,15 +190,13 @@ jobs:
 
       - name: AI synthesis
         id: ai
-        uses: your-org/openCI/.github/workflows/claude-harness.yml@v2
+        uses: ./actions/observability/analyzers/call-glm
         with:
-          task: "daily-report"
           prompt-path: "prompts/observability/daily-report.md"
-          model: "claude-haiku-4-5-20251001"
-          max-turns: 1
           context: ${{ needs.collect.outputs.stats }}
-        secrets:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          api-key: ${{ secrets.GLM_API_KEY }}
+          base-url: ${{ secrets.GLM_BASE_URL }}
+          model: ${{ secrets.GLM_MODEL }}
 
   publish:
     needs: synthesize

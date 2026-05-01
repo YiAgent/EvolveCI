@@ -1,0 +1,114 @@
+name: "Call GLM"
+description: "Call GLM API for AI classification."
+
+inputs:
+  prompt-path:
+    description: "Path to the prompt template"
+    required: true
+  context:
+    description: "JSON context string"
+    required: true
+  api-key:
+    description: "GLM API key"
+    required: true
+  base-url:
+    description: "GLM API base URL"
+    required: false
+    default: "https://open.bigmodel.cn/api/paas/v4"
+  model:
+    description: "GLM model name"
+    required: false
+    default: "glm-5.1"
+
+outputs:
+  result:
+    description: "AI response"
+    value: ${{ steps.call.outputs.result }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: call
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        PROMPT_PATH="${{ inputs.prompt-path }}"
+        CONTEXT='${{ inputs.context }}'
+        API_KEY="${{ inputs.api-key }}"
+        BASE_URL="${{ inputs.base-url }}"
+        MODEL="${{ inputs.model }}"
+
+        # Read prompt template
+        if [ ! -f "$PROMPT_PATH" ]; then
+          echo "::error::Prompt file not found: $PROMPT_PATH"
+          exit 1
+        fi
+
+        PROMPT=$(cat "$PROMPT_PATH")
+
+        # Replace template variables with context
+        WORKFLOW_NAME=$(echo "$CONTEXT" | jq -r '.workflow_name // ""')
+        FAILED_STEP=$(echo "$CONTEXT" | jq -r '.failed_step // ""')
+        FLAKINESS_SCORE=$(echo "$CONTEXT" | jq -r '.flakiness_score // 0')
+        REPO=$(echo "$CONTEXT" | jq -r '.repo // ""')
+        RUN_ID=$(echo "$CONTEXT" | jq -r '.run_id // ""')
+        LOG_TAIL=$(echo "$CONTEXT" | jq -r '.log_tail // ""')
+
+        # Replace placeholders in prompt
+        PROMPT=$(echo "$PROMPT" | sed \
+          -e "s|{{workflow_name}}|$WORKFLOW_NAME|g" \
+          -e "s|{{failed_step}}|$FAILED_STEP|g" \
+          -e "s|{{flakiness_score}}|$FLAKINESS_SCORE|g" \
+          -e "s|{{repo}}|$REPO|g" \
+          -e "s|{{run_id}}|$RUN_ID|g" \
+          -e "s|{{log_tail}}|$LOG_TAIL|g" \
+          -e "s|{{context}}|$CONTEXT|g")
+
+        # Escape prompt for JSON
+        PROMPT_JSON=$(echo "$PROMPT" | jq -Rs .)
+
+        # Build request payload
+        PAYLOAD=$(jq -n \
+          --arg model "$MODEL" \
+          --argjson content "$PROMPT_JSON" \
+          '{
+            model: $model,
+            messages: [
+              {
+                role: "user",
+                content: $content
+              }
+            ],
+            temperature: 0.1,
+            max_tokens: 1024
+          }')
+
+        # Call GLM API
+        RESPONSE=$(curl -sS -X POST \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer $API_KEY" \
+          -d "$PAYLOAD" \
+          "$BASE_URL/chat/completions" 2>/dev/null)
+
+        # Extract the response content
+        RESULT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
+
+        if [ -z "$RESULT" ]; then
+          echo "::warning::Empty response from GLM API"
+          echo "result={}" >> "$GITHUB_OUTPUT"
+        else
+          # Try to parse as JSON
+          if echo "$RESULT" | jq . 2>/dev/null; then
+            {
+              echo "result<<EVOLVECI_EOF"
+              echo "$RESULT"
+              echo "EVOLVECI_EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::GLM response is not valid JSON"
+            echo "result={}" >> "$GITHUB_OUTPUT"
+          fi
+        fi
+
+        echo "::notice::GLM API call completed"

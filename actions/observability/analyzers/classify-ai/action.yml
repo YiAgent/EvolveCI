@@ -56,11 +56,11 @@ runs:
 
         # Select model and prompt based on tier
         if [ "$TIER" = "4" ]; then
-          model="claude-sonnet-4-20250514"
+          model="glm-5.1"
           prompt_path="prompts/observability/classify-failure-sonnet.md"
           max_chars=32768
         else
-          model="claude-haiku-4-5-20251001"
+          model="glm-5.1"
           prompt_path="prompts/observability/classify-failure-haiku.md"
           max_chars=8192
         fi

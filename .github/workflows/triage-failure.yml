@@ -148,15 +148,13 @@ jobs:
         id: tier3
         if: steps.tier3-prep.outputs.context != ''
         continue-on-error: true
-        uses: your-org/openCI/.github/workflows/claude-harness.yml@v2
+        uses: ./actions/observability/analyzers/call-glm
         with:
-          task: "classify-failure"
           prompt-path: ${{ steps.tier3-prep.outputs.prompt-path }}
-          model: ${{ steps.tier3-prep.outputs.model }}
-          max-turns: 1
           context: ${{ steps.tier3-prep.outputs.context }}
-        secrets:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          api-key: ${{ secrets.GLM_API_KEY }}
+          base-url: ${{ secrets.GLM_BASE_URL }}
+          model: ${{ secrets.GLM_MODEL }}
 
       - name: Dispatch classification
         id: dispatch

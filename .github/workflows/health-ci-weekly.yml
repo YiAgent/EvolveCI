@@ -160,15 +160,13 @@ jobs:
 
       - name: AI synthesis
         id: ai
-        uses: your-org/openCI/.github/workflows/claude-harness.yml@v2
+        uses: ./actions/observability/analyzers/call-glm
         with:
-          task: "weekly-deep-dive"
           prompt-path: "prompts/observability/weekly-deep-dive.md"
-          model: "claude-sonnet-4-20250514"
-          max-turns: 1
           context: ${{ needs.collect.outputs.weekly-data }}
-        secrets:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          api-key: ${{ secrets.GLM_API_KEY }}
+          base-url: ${{ secrets.GLM_BASE_URL }}
+          model: ${{ secrets.GLM_MODEL }}
 
   publish:
     needs: synthesize
