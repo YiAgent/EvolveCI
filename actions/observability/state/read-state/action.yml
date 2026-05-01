@@ -41,6 +41,8 @@ runs:
         if [ -f "$CACHE_FILE" ]; then
           value=$(jq -r '.' "$CACHE_FILE" 2>/dev/null || echo "")
           if [ -n "$value" ] && [ "$value" != "null" ]; then
+            # Ensure valid JSON output
+            value=$(echo "$value" | jq -c '.' 2>/dev/null || echo "$value")
             {
               echo "hit=true"
               echo "value<<EVOLVECI_EOF"
@@ -60,6 +62,9 @@ runs:
         value=$(git show "origin/_state:$STATE_PATH" 2>/dev/null || echo "")
 
         if [ -n "$value" ] && [ "$value" != "" ]; then
+          # Ensure valid JSON output
+          value=$(echo "$value" | jq -c '.' 2>/dev/null || echo "$value")
+
           # Write back to cache
           mkdir -p "$CACHE_DIR"
           echo "$value" > "$CACHE_FILE"

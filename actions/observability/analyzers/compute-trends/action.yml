@@ -41,7 +41,13 @@ runs:
 
         HEALTH_DATA='${{ inputs.current-health-data }}'
 
-        if [ -z "$HEALTH_DATA" ] || [ "$HEALTH_DATA" = "{}" ]; then
+        # Validate JSON input; fallback to empty if malformed
+        if ! echo "$HEALTH_DATA" | jq empty 2>/dev/null; then
+          echo "::warning::current-health-data is not valid JSON, using empty default"
+          HEALTH_DATA='{}'
+        fi
+
+        if [ -z "$HEALTH_DATA" ] || [ "$HEALTH_DATA" = "{}" ] || [ "$HEALTH_DATA" = '{"workflows":{}}' ] || [ "$HEALTH_DATA" = '{workflows:{}}' ]; then
           cat >> "$GITHUB_OUTPUT" <<EOF
         trend=stable
         delta=0
