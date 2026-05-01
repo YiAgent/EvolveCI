@@ -57,19 +57,21 @@ jobs:
         run: |
           RUNS='${{ steps.query.outputs.runs }}'
 
-          # Group by repo+'/'+workflow
-          stats=$(echo "$RUNS" | jq '
-            group_by(.repo + "/" + .workflowName) |
-            map({
-              key: .[0].repo + "/" + .[0].workflowName,
-              repo: .[0].repo,
-              workflow: .[0].workflowName,
-              total: length,
-              failed: [.[] | select(.conclusion == "failure")] | length,
-              success: [.[] | select(.conclusion == "success")] | length,
-              failure_rate: (if length > 0 then (([.[] | select(.conclusion == "failure")] | length) * 100 / length | floor) else 0 end)
-            })
-          ')
+          # Write jq filter to file to avoid quoting issues
+          cat > /tmp/stats.jq << 'JQEOF'
+          group_by(.repo + "/" + .workflowName) |
+          map({
+            key: .[0].repo + "/" + .[0].workflowName,
+            repo: .[0].repo,
+            workflow: .[0].workflowName,
+            total: length,
+            failed: [.[] | select(.conclusion == "failure")] | length,
+            success: [.[] | select(.conclusion == "success")] | length,
+            failure_rate: (if length > 0 then (([.[] | select(.conclusion == "failure")] | length) * 100 / length | floor) else 0 end)
+          })
+          JQEOF
+
+          stats=$(echo "$RUNS" | jq -f /tmp/stats.jq)
 
           echo "stats<<EVOLVECI_EOF" >> "$GITHUB_OUTPUT"
           echo "$stats" >> "$GITHUB_OUTPUT"
