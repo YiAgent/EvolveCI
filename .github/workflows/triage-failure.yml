@@ -95,7 +95,7 @@ jobs:
 
   triage:
     needs: scan
-    if: needs.scan.outputs.skip != 'true' && needs.scan.outputs.failure-count != '0' && fromJson(needs.scan.outputs.runs || '[]') != []
+    if: needs.scan.outputs.skip != 'true' && needs.scan.outputs.failure-count != '0'
     runs-on: blacksmith
     timeout-minutes: 15
     permissions:
@@ -345,7 +345,7 @@ jobs:
 
           ### Failed Jobs
           \`\`\`json
-          ${{ toJson(matrix.run.failed_jobs || []) }}
+          ${{ toJson(matrix.run.failed_jobs || fromJson('[]')) }}
           \`\`\`
 
           ---
