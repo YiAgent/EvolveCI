@@ -1,6 +1,6 @@
 # EvolveCI — CI 控制塔功能规格（SPEC）
 
-**版本**：v2.1（功能规格版，剥离实现代码）
+**版本**：v3.0（全能力覆盖版：fingerprint + 聚类 + retry + auto-fix + 多渠道通知 + 趋势分析）
 **定位**：独立 meta-repo，观察所有仓库的 CI 流水线，主动汇报 + 实时分诊
 **与 OpenCI 关系**：EvolveCI 消费 OpenCI 的 `claude-harness`（workflow 级别调用），不复制其功能
 
@@ -12,6 +12,7 @@
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| v3.0 | 2026-05-01 | 全能力覆盖：Error Fingerprint + 聚类 + Retry 策略 + Auto-fix + Flaky 注册表 + 多渠道通知 + 错误趋势分析 + 状态清理 + 熔断自动恢复 |
 | v2.1 | 2026-05-01 | 拆分独立仓库；剥离所有 YAML/bash 实现细节，改为功能契约描述 |
 | v2.0 | 2026-05-01 | 完整重构：四层架构、AI 调用提升到 workflow 级别、JSON 替代 YAML 解析、日志脱敏、`_state` 孤儿分支、成本飞轮 |
 | v1.0 | 2026-04-XX | 初始版本：三层架构 + 实时分诊 + 自动重跑 + 每日报告 |
@@ -47,6 +48,8 @@
 ### 1.4 复用 OpenCI
 
 - AI 调用在 **workflow 级别** 使用 `claude-harness.yml`（reusable workflow），不在 composite action 内部调用
+- `claude-harness` 配置为使用 self-hosted GLM 模型（`glm-5.1`），通过 OpenCI 统一的 AI 调用入口（限速、密钥、审计）
+- 具体模型和 endpoint 在 OpenCI 的 `claude-harness.yml` 的 `with:` 参数中配置，EvolveCI 只传 `model`、`task`、`prompt-path`、`context`
 - Slack 通知复用 `your-org/openCI/actions/integrations/slack-notify@v2`
 - 第三方 SHA 对齐 OpenCI 的 `manifest.yml`
 
@@ -74,7 +77,10 @@ evolveCI/
 │   │   │   ├── classify-ai/          # AI 上下文准备 + 输出解析（Haiku/Sonnet）
 │   │   │   ├── compute-flakiness/    # Flaky 度滑动窗口计算
 │   │   │   ├── compute-mttr/         # 平均故障恢复时长
-│   │   │   └── compute-trends/       # DORA 指标 + 趋势检测
+│   │   │   ├── compute-trends/       # DORA 指标 + 趋势检测
+│   │   │   ├── error-fingerprint/    # 错误指纹生成（sha256 前 12 位）
+│   │   │   ├── track-flaky-tests/    # Flaky test 注册表维护
+│   │   │   └── compute-error-trends/ # 错误维度趋势分析（fingerprint × time）
 │   │   │
 │   │   ├── state/                    # 持久化基础设施
 │   │   │   ├── read-state/           # cache 快速路径 + _state 分支回源
@@ -84,7 +90,9 @@ evolveCI/
 │   │   └── publishers/               # 输出渠道
 │   │       ├── post-issue-report/    # 封装 peter-evans/create-issue-from-file
 │   │       ├── post-slack-report/    # 复用 OpenCI slack-notify
+│   │       ├── post-notification/    # 统一多渠道通知网关（Slack/Discord/Email）
 │   │       ├── auto-rerun/           # gh run rerun --failed + 预算检查
+│   │       ├── auto-fix/             # 已知可修复错误自动生成 PR（P3）
 │   │       └── trip-circuit-breaker/ # 熔断告警：gh issue + Slack
 │
 ├── prompts/
@@ -251,8 +259,8 @@ Tier 4: classify-ai (Sonnet)      ← prompts/observability/classify-failure-son
 
 **行为**
 1. 根据 `tier` 选择 prompt 与 model：
-   - tier=3 → `prompts/observability/classify-failure-haiku.md`，model `claude-haiku-4-5-20251001`，日志取末 50 行（≤8192 chars）
-   - tier=4 → `prompts/observability/classify-failure-sonnet.md`，model `claude-sonnet-4-20250514`，完整日志（≤32768 chars）
+   - tier=3 → `prompts/observability/classify-failure-haiku.md`，model `glm-5.1`，日志取末 50 行（≤8192 chars）
+   - tier=4 → `prompts/observability/classify-failure-sonnet.md`，model `glm-5.1`，完整日志（≤32768 chars）
 2. 构造 JSON：`{ workflow_name, failed_step, flakiness_score, repo, run_id, log_tail }`（`log_tail` 用 `jq -Rs .` 转义）
 3. 输出 `context` 给后续 `uses: your-org/openCI/.github/workflows/claude-harness.yml@v2`
 
@@ -364,6 +372,100 @@ matched_pattern 规则：
 3. `delta > 10` → degrading；`delta < -10` → improving；否则 stable
 4. DORA 三件套（部署频率 / 变更前置时间 / 变更失败率 / MTTR）由 workflow 层调 `DeveloperMetrics/*` actions，本 action 仅占位拼接
 
+### 4.10 error-fingerprint
+
+**职责**：为每个失败生成唯一指纹，用于跨 run 聚类和精确去重。
+
+**输入**：`log`（已脱敏）、`failed-step`、`category`。
+**输出**：`fingerprint`（12 位 hex）、`error-lines`（提取的错误行摘要）。
+
+**算法**
+1. 从日志中提取最后 3 行包含 `Error`/`FAIL`/`fatal`/`panic`/`Exception` 的行（大小写不敏感）
+2. 拼接 `${failed_step}::${error_lines}`
+3. `echo -n "$composite" | sha256sum | cut -c1-12` 作为 fingerprint
+4. 无错误行可提取 → fingerprint 为空字符串（下游跳过聚类）
+
+**安全**：fingerprint 仅含 hex 字符，无注入风险。
+
+### 4.11 auto-fix（P3 范围）
+
+**职责**：对已知可自动修复的失败类型，生成修复 PR。
+
+**适用范围**（仅限低风险修复，白名单制）：
+
+| 失败类型 | 修复命令 | PR 标题前缀 |
+|----------|----------|-------------|
+| Prettier/ESLint 格式错误 | `npx prettier --write .` / `npx eslint --fix` | `[auto-fix] formatting:` |
+| YAML 语法错误（非 workflow） | `yamllint -d relaxed --fix` | `[auto-fix] yaml:` |
+| lockfile 不一致 | 对应 `npm install` / `pip install` 重新生成 | `[auto-fix] lockfile:` |
+
+**输入**：`repo`、`run-id`、`fingerprint`、`category`、`fix-type`（白名单枚举）、`token`。
+**输出**：`pr-url`（成功时）、`skipped`（不在白名单中时）。
+
+**行为**
+1. 检查 `fix-type` 是否在白名单中 → 不在则 `skipped=true`
+2. Clone 仓库、checkout 失败的 head SHA
+3. 执行对应修复命令
+4. `git diff --stat` 检查是否有变更 → 无变更则跳过
+5. 创建分支 `auto-fix/<fingerprint>`，commit，push，创建 PR
+6. PR body 包含：失败 run 链接、fingerprint、修复命令、diff 预览
+
+**安全约束**
+- 仅在 `known-patterns.json` 中标记 `auto_fix=true` 的模式触发
+- 不允许修改 `.github/workflows/` 目录
+- 不允许修改 `package.json` 依赖版本范围（只允许 lockfile）
+- 不允许修改 `Dockerfile` 基础镜像版本
+- 每日最多 3 个 auto-fix PR（通过 `_state/daily-counters/<date>.json` 中 `auto_fix` 维度计数）
+- PR 创建后自动请求 reviewer（`data/circuit-config.yml` 中的 `auto-fix-reviewers`）
+
+### 4.12 track-flaky-tests
+
+**职责**：从失败日志中提取具体 test case 名称，维护 flaky test 注册表。
+
+**输入**：`log`（已脱敏）、`repo`、`workflow-name`、`run-id`。
+**输出**：`new-flaky-tests`（JSON 数组）、`flaky-count`（int）。
+
+**行为**
+1. 用正则提取日志中的失败 test case 名称（支持 pytest `FAILED tests/xxx.py::test_name`、jest `FAIL src/xxx.test.ts`、go test `--- FAIL: TestXxx` 格式）
+2. 查询 `_state/flaky-tests/<repo>.json` 中是否已有记录
+3. 同一 test 在不同 run 中失败 ≥3 次（`failure_count >= 3`）且总 run 数 ≥10 → 标记为 `status: flaky`
+4. 标记为 flaky 的 test 自动添加到 `known-patterns.json`（`category: flaky`, `should_rerun: true`）
+
+**注册表格式**（`_state/flaky-tests/<repo>.json`）
+
+```json
+{
+  "tests/test_timeout.py::test_connection_timeout": {
+    "first_seen": "2026-05-01",
+    "last_seen": "2026-05-03",
+    "failure_count": 5,
+    "total_runs": 20,
+    "flakiness_rate": 25,
+    "status": "flaky",
+    "linked_runs": ["123", "456", "789"]
+  }
+}
+```
+
+**注意**：flaky test 检测是**辅助信号**，不是独立 Tier。它的输出喂给 Tier 1 的 `known-patterns.json` 和 Tier 2 的 `flakiness-score`，不直接决定分类结果。
+
+### 4.13 compute-error-trends
+
+**职责**：基于 `_state/fingerprints/` 和 `_state/daily-counters/` 的历史数据，生成错误维度趋势报告。
+
+**输入**：`lookback-days`（默认 7）、`token`。
+**输出**：`top-errors`（JSON 数组，top 10）、`emerging-patterns`（JSON 数组）、`workflow-instability`（JSON 数组）。
+
+**行为**
+1. 从 `_state/fingerprints/` 读取所有 fingerprint 的 `last_seen` 和 `count`
+2. 筛选 `last_seen` 在 lookback-days 内的，按 count 降序取 top 10 → `top-errors`
+3. 筛选 `first_seen` 在 7 天内且 count ≥2 的 → `emerging-patterns`（新出现且频率上升）
+4. 从 `_state/workflow-health/` 读取各 workflow 的 daily 数据，计算标准差 → 按标准差降序取 top 5 → `workflow-instability`
+
+**集成点**
+- 每日报告（§8）的 `synthesize` prompt 自动包含 `top-errors` 和 `emerging-patterns`
+- 每周报告（§9）包含完整 `workflow-instability` 排名
+
 ---
 
 ## 五、状态层（State）
@@ -392,11 +494,18 @@ _state/
 ├── known-patterns.json        # 已知失败模式库（AI 自动 PR，人工审核）
 ├── circuit-breaker-state.json # 活跃熔断状态
 ├── daily-counters/
-│   └── 2026-05-01.json       # 当日重跑/分诊计数
+│   └── 2026-05-01.json       # 当日重跑/分诊/auto-fix 计数
 ├── workflow-health/
 │   └── org-repo-workflow.json # 各 workflow 30 天健康度
-└── weekly-snapshots/
-    └── 2026-W18.json         # 周级聚合快照
+├── weekly-snapshots/
+│   └── 2026-W18.json         # 周级聚合快照
+├── fingerprints/
+│   └── a1b2c3d4e5f6.json    # 每个 fingerprint 的出现记录
+├── flaky-tests/
+│   └── org-repo.json         # 各 repo 的 flaky test 注册表
+├── retry-counters/
+│   └── <fingerprint>/<date>.json  # 同一 fingerprint 每日 retry 计数
+└── retry-success-log.json    # retry 成功统计（用于评估 retry 有效率）
 ```
 
 **初始化**（手动一次性执行）
@@ -460,8 +569,30 @@ git push origin _state
 | `gho_[a-zA-Z0-9]{36}` | `gho_***REDACTED***` |
 | `sk-[a-zA-Z0-9]{20,}` | `sk-***REDACTED***` |
 | `(10\|172\|192)\.[0-9]+\.[0-9]+\.[0-9]+` | `***REDACTED_IP***` |
+| `AKIA[0-9A-Z]{16}` | `AKIA***REDACTED***` |
+| `-----BEGIN.*PRIVATE KEY-----` | `***REDACTED_PRIVATE_KEY***` |
+| `PRIVATE_KEY\s*=\s*[a-zA-Z0-9+/=]{20,}` | `PRIVATE_KEY=***REDACTED***` |
+| `(?i)(aws_secret_access_key\|aws_access_key_id)\s*=\s*[a-zA-Z0-9+/=]+` | `***REDACTED_AWS***` |
 
 正则集中维护在 `lib/redact-log.sh`，被 `redact-log` action 与未来需要的其他场景复用。
+
+> **持续迭代**：脱敏正则集应定期 review，新增常见 secret 格式时及时补充。
+
+### 5.5 状态清理策略
+
+`_state` 分支 append-only 会导致无限增长。以下为保留策略：
+
+| 目录 | 保留期限 | 清理方式 |
+|------|----------|----------|
+| `daily-counters/` | 30 天 | 超期文件删除 |
+| `weekly-snapshots/` | 52 周（1 年） | 超期文件删除 |
+| `workflow-health/*.json` 的 `daily` 字段 | 90 天 | jq 过滤旧 key |
+| `fingerprints/` | 180 天（`last_seen`） | 超期移入 `fingerprints-archive/` |
+| `flaky-tests/` | 持续保留 | 仅清理 `status: resolved` 且 90 天未复现的 |
+| `retry-counters/` | 7 天 | 超期文件删除 |
+| `known-patterns.json` | 持续保留 | `last_seen` 超 180 天的移入 `archived-patterns.json` |
+
+**执行方式**：`heartbeat.yml` 每周一次触发清理步骤（或独立 `state-cleanup.yml` workflow，P4 范围）。
 
 ---
 
@@ -481,6 +612,18 @@ git push origin _state
 4. **递增计数**：写回 `_state/daily-counters/<today>.json`（merge）
 
 > 三维预算（workflow / pattern / repo）由 §11 熔断器在调用前完成检查；本 action 只关心 workflow 维度。
+
+**Retry 策略**（在 triage 之前执行，仅适用于 fingerprint 命中的已知 flaky 模式）
+
+| 条件 | 动作 |
+|------|------|
+| fingerprint 在 `known-patterns.json` 中且 `auto_rerun=true` | 直接 retry，跳过 triage |
+| 同一 fingerprint 当日已 retry ≥2 次 | 不再 retry，进入 triage 流程 |
+| retry 后 run 成功 | 记录到 `_state/retry-success-log.json`（用于统计 retry 有效率） |
+| retry 后 run 仍失败 | 正常进入 Tier 1→4 分类流程 |
+
+**retry 计数存储**：`_state/retry-counters/<fingerprint>/<date>.json`，格式 `{ "count": N }`。
+**retry 成功率统计**：`_state/retry-success-log.json`，格式 `{ "<fingerprint>": { "total": N, "success": M } }`。
 
 ### 6.2 trip-circuit-breaker
 
@@ -507,6 +650,32 @@ git push origin _state
 
 **输入**：`webhook-url`、`title`、`message`、`status`（默认 `info`）。
 **实现委托**：`your-org/openCI/actions/integrations/slack-notify@v2`，`continue-on-error: true`（Slack 故障不阻塞 CI）。
+
+### 6.5 post-notification（多渠道通知网关）
+
+**职责**：统一通知分发，根据 severity 级别决定渠道组合。
+
+**输入**：`title`、`message`、`severity`（`critical` | `high` | `medium` | `low`）、`webhooks`（JSON，含各渠道 URL）。
+
+**渠道分发策略**
+
+| severity | Slack | Discord | GitHub Issue | Email（GitHub native） |
+|----------|-------|---------|--------------|----------------------|
+| critical | ✅ @channel | ✅ | ✅ | ✅（workflow failure 触发） |
+| high | ✅ | ✅ | ✅ | — |
+| medium | — | — | ✅ | — |
+| low / flaky | — | — | — | —（仅记录 `_state`） |
+
+**输入契约**
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `slack-webhook` | ✗ | Slack incoming webhook URL |
+| `discord-webhook` | ✗ | Discord webhook URL |
+| `severity` | ✗ | 决定哪些渠道被激活 |
+| `continue-on-error` | — | 所有渠道调用均 `continue-on-error: true`（通知故障不阻塞 CI） |
+
+**行为**：按 severity 过滤渠道列表，逐个调用。任一渠道失败不影响其他渠道。
 
 ---
 
@@ -536,23 +705,37 @@ triage (matrix, contents:write + issues:write, 15min)
     1. harden-runner + checkout
     2. fetch _state branch + 加载 known-patterns.json
     3. redact-log（base64 日志 → 脱敏明文）
+    3.5. error-fingerprint（日志 → 12 位 hex 指纹）
+    3.6. Retry 去重检查：读 `_state/retry-counters/<fingerprint>/<date>.json`
+         → 当日 retry < 2 且 fingerprint 在 known-patterns 中 auto_rerun=true → 直接 retry + 递增计数 → 跳过后续步骤
+         → 否则继续
+    3.7. 聚类检查：搜 `label:ci/<cat> "<fingerprint>" in:body state:open`
+         → 存在 → 追加 comment（不新建 issue）→ 跳到 step 11
+         → 不存在 → 继续
     4. Tier 1: match-known-patterns
     5. Tier 2: classify-heuristic（仅当 T1 miss）
     6. Tier 3 prepare（仅当 T1 miss && T2 confidence=low）→ 上下文 JSON
     7. Tier 3 AI: uses claude-harness.yml@v2（with task/prompt/model/context）
        continue-on-error: true（AI 故障不阻塞）
     8. Dispatch: 按 T1 → T2(高/中) → T3 → 默认 unclassified 优先级聚合 category/severity/should_rerun/should_notify/summary/tier
+    8.5. track-flaky-tests（从日志提取 test case → 维护 flaky 注册表）
     9. Auto-rerun（仅 should_rerun=true）→ 调 §6.1
     10. Create issue（should_notify=true && category != flaky）
-        - 去重：搜 `label:ci/<cat> "<workflow>" in:title state:open`，存在则 comment 追加，否则新建
+        - 去重：搜 `label:ci/<cat> "<fingerprint>" in:body state:open`（fingerprint 级精确去重，替代原来的工作流名模糊匹配）
+        - 存在 → comment 追加 + 更新 `seen_count`
+        - 不存在 → 新建 issue，body 包含 fingerprint
         - title: `CI [<cat>]: <workflow> - <summary>`
-        - labels: `ci/<cat>,severity/<sev>`
-    11. Slack（severity in {critical, high}）→ 调 §6.4
+        - labels: `ci/<cat>,severity/<sev>,fingerprint/<fp>`
+    10.5. 多渠道通知（§6.5）→ 根据 severity 分发 Slack/Discord/Issue
+    11. Slack（severity in {critical, high}）→ 调 §6.4（兼容旧逻辑，后续迁移到 §6.5）
     12. Learn new pattern（仅 Tier 3 有 matched_pattern 时）
         - ReDoS 防护：长度 ≤200，否则 ::warning 跳过
         - id: `ai-<md5(pattern)[0:8]>`
         - 写 /tmp/new-pattern.json
         - peter-evans/create-pull-request：分支 `pattern/<run-id>`，PR 标题含 category；人工审核合并后写入 `_state/known-patterns.json`
+    13. Write fingerprint record（`_state/fingerprints/<fingerprint>.json`）
+        - 存在 → merge：`count += 1`，`last_seen = today`，追加 `run_id` 到 `linked_runs[]`
+        - 不存在 → 创建：`{ first_seen, last_seen, count: 1, linked_runs: [run_id], category, source }
 ```
 
 **关键不变量**
@@ -785,7 +968,14 @@ read-state（查三个维度当日计数）
 
 ### 11.3 恢复机制
 
-熔断后，**所有** auto 处理停止，直到人工移除 `ci:circuit-broken` label（或在 Issue 中评论 `/resume`，由后续机器人解析——P3 范围）。
+熔断后，**所有** auto 处理停止，直到满足以下任一条件：
+
+1. **手动恢复**：人工移除 `ci:circuit-broken` label（或关闭对应 issue）
+2. **评论恢复**：在 Issue 中评论 `/resume`，由后续机器人解析（P3 范围）
+3. **自动恢复**（新增）：
+   - 熔断 issue 创建 **4h** 后自动添加 comment 提醒：`⚠️ Circuit breaker active for 4h. Please review or remove label to resume.`
+   - **24h** 后如果仍无人处理 → 自动移除 `ci:circuit-broken` label + comment `🔄 Auto-recovered after 24h timeout. If issue persists, investigate and re-trip manually.`
+   - 防止人工遗忘导致系统永久停止
 
 ### 11.4 安全约束
 
@@ -817,6 +1007,11 @@ repos:
       - "stale.yml"
       - "community.yml"
 ```
+
+**字段说明**
+- `workflows`：指定监控哪些 workflow。`"*"` = 全部，逗号分隔 = 白名单（P4：当前实现拉取所有 workflow，过滤逻辑待实现）
+- `exclude`：从监控中排除的 workflow（P4：当前实现忽略此字段）
+- `priority`：`high` = 失败立刻通知，`low` = 只进报告
 
 **目标仓库零配置变更**。跨 repo 访问通过 fine-grained PAT，仅需 `actions:read` + `metadata:read`。
 
@@ -857,7 +1052,13 @@ repos:
 | Tier 4: Sonnet 深度 | ~1 次/天 | $0.01 | $0.30 |
 | 每日报告（Haiku） | 22 次/月 | $0.005 | $0.11 |
 | 每周深度（Sonnet） | 4 次/月 | $0.10 | $0.40 |
+| Error Fingerprint | ~50 次/天 | $0 | $0 |
+| Retry（已知 flaky） | ~5 次/天 | $0 | $0 |
+| Flaky test 检测 | ~50 次/天 | $0 | $0 |
+| Auto-fix PR | ~3 次/天 | $0 | $0 |
 | **总计** | | | **~$0.93/月** |
+
+> Fingerprint、Retry、Flaky 检测、Auto-fix 均为零 AI 成本（纯规则 + shell），不增加月度开支。
 
 ### 14.2 成本飞轮
 
@@ -892,6 +1093,7 @@ repos:
 | `nick-fields/retry` | v3 | `_state` 分支写入冲突重试 |
 | `DeveloperMetrics/deployment-frequency` | — | DORA 部署频率 |
 | `DeveloperMetrics/lead-time-for-changes` | — | DORA 变更前置时间 |
+| `peter-evans/create-pull-request` | v7 | auto-fix 修复 PR（P3） |
 
 所有第三方 actions 通过 `manifest.yml` 锁定 SHA。
 
@@ -916,12 +1118,23 @@ repos:
 | P1 | `triage-failure.yml` 主流程（含 Tier 3 Haiku） | 在 1 个 repo 上运行 1 周 |
 | P1 | `auto-rerun` + 三维预算检查 + `trip-circuit-breaker` | 验证重跑计数和熔断触发 |
 | P1 | `_state` 孤儿分支初始化 + 双层持久化 | 验证 cache/branch 读写 |
+| P1 | `error-fingerprint` action + 聚类去重 | 对 20 条失败生成唯一指纹 |
+| P1 | fingerprint 级 retry 策略 | 同一 fingerprint retry ≥2 次后进 triage |
 | P2 | `health-ci-daily.yml` + `compute-flakiness` + `compute-trends` | 对比 2 周数据，验证退化检测 |
 | P2 | Slack 通知分级（critical/high/medium） | 验证消息内容和频率 |
+| P2 | `track-flaky-tests` action + 注册表 | pytest/jest/go test 失败提取正确 |
+| P2 | `compute-error-trends` action | top-errors 和 emerging-patterns 输出正确 |
+| P2 | `post-notification` 多渠道通知网关（Slack + Discord） | severity=critical 时多渠道收到 |
+| P2 | 熔断器自动恢复（4h 提醒 + 24h 超时） | 模拟熔断 25h 后自动恢复 |
+| P2 | 脱敏正则扩展（AWS/GCP/PRIVATE_KEY） | AKIA/PRIVATE_KEY 样本正确脱敏 |
 | P3 | `health-ci-weekly.yml` + Tier 4 Sonnet | 人工审查报告质量 |
 | P3 | `heartbeat.yml` 自监控 | 模拟 triage-failure 停止运行 |
+| P3 | `auto-fix` action（白名单制） | Prettier 格式错误自动生成修复 PR |
+| P3 | triage-failure 接入 `claude-harness`（替代 `call-glm`） | Tier 3 通过 claude-harness 调用 GLM 成功 |
 | P4 | `compute-mttr` + DORA 三件套集成 | 与手动计算对比验证 |
 | P4 | 新 repo onboarding 流程 | 添加第 6 个 repo，验证零配置 |
+| P4 | `onboarded-repos` 的 `workflows`/`exclude` 过滤 | 指定白名单时只拉取对应 run |
+| P4 | `_state` 分支状态清理 | 验证 30 天前数据被清理 |
 
 ---
 
@@ -957,28 +1170,40 @@ repos:
 
 下表把本 SPEC 映射到 P0–P4 的可独立交付任务（每行 ≤ 1 周，含验收）。
 
-| 任务 ID | SPEC 引用 | 交付物 | 依赖 | 验收 |
-|---|---|---|---|---|
-| EC-001 | §3.1 | `actions/observability/sources/query-github-actions/` | 无 | 对 1 个 repo 输出非空 JSON，含 log_base64 |
-| EC-002 | §5.4 | `actions/observability/state/redact-log/` + `lib/redact-log.sh` | 无 | 给定含 `ghp_xxx` 与 `Bearer xxx` 的样本输出 `***REDACTED***` |
-| EC-003 | §5.1 | `_state` 分支初始化 + README 说明 | 无 | `git ls-remote origin _state` 非空 |
-| EC-004 | §5.2 + §5.3 | `read-state` / `write-state` actions | EC-003 | 写入后回读一致；冲突场景 retry 成功 |
-| EC-005 | §13 | `data/known-patterns.seed.json`（10 条） | 无 | 每条 pattern 用对应样本日志 `grep -E` 命中 |
-| EC-006 | §4.2 | `match-known-patterns` action | EC-005 | 给定 20 条历史失败，命中率 ≥70% |
-| EC-007 | §4.3 | `classify-heuristic` action | 无 | 给定规则表样本，confidence/category 全部正确 |
-| EC-008 | §4.4 + §4.5 | `classify-ai` prepare/parse + Haiku prompt | EC-001/EC-002 | 上下文 JSON 通过 `claude-harness` 调用产出合法 JSON |
-| EC-009 | §6.1 + §11 | `auto-rerun` + 三维预算检查 | EC-004 | 第 4 次重跑触发 workflow 维度熔断 |
-| EC-010 | §6.2 | `trip-circuit-breaker` | EC-009 | label `ci:circuit-broken` issue 创建成功 + Slack 收到 |
-| EC-011 | §6.3 / §6.4 | `post-issue-report` / `post-slack-report` | 无 | 一份 fixture markdown 端到端 issue + slack |
-| EC-012 | §7.1 | `triage-failure.yml`（先实现 Tier 1+2 + auto-rerun + issue） | EC-006/007/009/011 | 单 repo 灰度 7 天，issue 噪音可接受 |
-| EC-013 | §7.1 Tier 3 + Learn pattern | Tier 3 + `peter-evans/create-pull-request` PR 流程 | EC-008/EC-012 | 1 周内自动 PR ≥1 条新 pattern |
-| EC-014 | §8 | `health-ci-daily.yml` + Haiku prompt | EC-001/EC-004/EC-011 | 连续 3 天日报无虚构 |
-| EC-015 | §4.7 + §4.9 | `compute-flakiness` + `compute-trends` | EC-014 | 对 2 周数据计算 trend，与人工口径一致 |
-| EC-016 | §9 | `health-ci-weekly.yml` + Sonnet prompt | EC-014 | 首份周报人工审核通过 |
-| EC-017 | §10 | `heartbeat.yml` | EC-012 | 模拟 triage 停跑 25h，触发 workflow failure |
-| EC-018 | §4.4 Tier 4 | Sonnet 深度分析接入 triage 兜底 | EC-013 | 月度 Tier 4 调用 ≤2 次 |
-| EC-019 | §4.8 | `compute-mttr` + DORA 接入 | EC-016 | 与手动计算偏差 <10% |
-| EC-020 | §12 | onboarding 流程文档 + 第 6 个 repo 接入 | EC-014 | 零配置一次成功，一周观察无 false positive 飙升 |
+| 任务 ID | SPEC 引用 | 交付物 | 依赖 | 验收 | 状态 |
+|---------|-----------|--------|------|------|------|
+| EC-001 | §3.1 | `actions/observability/sources/query-github-actions/` | 无 | 对 1 个 repo 输出非空 JSON，含 log_base64 | ✅ 已完成 |
+| EC-002 | §5.4 | `actions/observability/state/redact-log/` + `lib/redact-log.sh` | 无 | 给定含 `ghp_xxx` 与 `Bearer xxx` 的样本输出 `***REDACTED***` | ✅ 已完成 |
+| EC-003 | §5.1 | `_state` 分支初始化 + README 说明 | 无 | `git ls-remote origin _state` 非空 | ✅ 已完成 |
+| EC-004 | §5.2 + §5.3 | `read-state` / `write-state` actions | EC-003 | 写入后回读一致；冲突场景 retry 成功 | ✅ 已完成 |
+| EC-005 | §13 | `data/known-patterns.seed.json`（10 条） | 无 | 每条 pattern 用对应样本日志 `grep -E` 命中 | ✅ 已完成 |
+| EC-006 | §4.2 | `match-known-patterns` action | EC-005 | 给定 20 条历史失败，命中率 ≥70% | ✅ 已完成 |
+| EC-007 | §4.3 | `classify-heuristic` action | 无 | 给定规则表样本，confidence/category 全部正确 | ✅ 已完成 |
+| EC-008 | §4.4 + §4.5 | `classify-ai` prepare/parse + Haiku prompt | EC-001/EC-002 | 上下文 JSON 通过 `claude-harness` 调用产出合法 JSON | ✅ 已完成 |
+| EC-009 | §6.1 + §11 | `auto-rerun` + 三维预算检查 | EC-004 | 第 4 次重跑触发 workflow 维度熔断 | ✅ 已完成 |
+| EC-010 | §6.2 | `trip-circuit-breaker` | EC-009 | label `ci:circuit-broken` issue 创建成功 + Slack 收到 | ✅ 已完成 |
+| EC-011 | §6.3 / §6.4 | `post-issue-report` / `post-slack-report` | 无 | 一份 fixture markdown 端到端 issue + slack | ✅ 已完成 |
+| EC-012 | §7.1 | `triage-failure.yml`（Tier 1+2 + auto-rerun + issue） | EC-006/007/009/011 | 单 repo 灰度 7 天，issue 噪音可接受 | ✅ 已完成 |
+| EC-013 | §7.1 Tier 3 + Learn pattern | Tier 3 + `peter-evans/create-pull-request` PR 流程 | EC-008/EC-012 | 1 周内自动 PR ≥1 条新 pattern | ✅ 已完成 |
+| EC-014 | §8 | `health-ci-daily.yml` + Haiku prompt | EC-001/EC-004/EC-011 | 连续 3 天日报无虚构 | ✅ 已完成 |
+| EC-015 | §4.7 + §4.9 | `compute-flakiness` + `compute-trends` | EC-014 | 对 2 周数据计算 trend，与人工口径一致 | ✅ 已完成 |
+| EC-016 | §9 | `health-ci-weekly.yml` + Sonnet prompt | EC-014 | 首份周报人工审核通过 | ✅ 已完成 |
+| EC-017 | §10 | `heartbeat.yml` | EC-012 | 模拟 triage 停跑 25h，触发 workflow failure | ✅ 已完成 |
+| EC-018 | §4.4 Tier 4 | Sonnet 深度分析接入 triage 兜底 | EC-013 | 月度 Tier 4 调用 ≤2 次 | ⬜ 待开始 |
+| EC-019 | §4.8 | `compute-mttr` + DORA 接入 | EC-016 | 与手动计算偏差 <10% | ⬜ 待开始 |
+| EC-020 | §12 | onboarding 流程文档 + 第 6 个 repo 接入 | EC-014 | 零配置一次成功，一周观察无 false positive 飙升 | ⬜ 待开始 |
+| EC-021 | §4.10 | `error-fingerprint` action | EC-001 | 对 20 条失败日志生成唯一 12 位 hex 指纹 | ⬜ 待开始 |
+| EC-022 | §6.1 Retry | fingerprint 级 retry 策略 + 计数器 | EC-021 | 同一 fingerprint retry ≥2 次后进入 triage | ⬜ 待开始 |
+| EC-023 | §4.12 | `track-flaky-tests` action + 注册表 | EC-021 | pytest/jest/go test 失败提取正确，3 次后标记 flaky | ⬜ 待开始 |
+| EC-024 | §7.1 聚类 | triage 中 fingerprint 聚类去重 | EC-021/EC-012 | 相同 fingerprint 不重复创建 issue | ⬜ 待开始 |
+| EC-025 | §6.5 | `post-notification` 多渠道通知网关 | 无 | severity=critical 时 Slack + Discord + Issue 均收到 | ⬜ 待开始 |
+| EC-026 | §4.13 | `compute-error-trends` action | EC-021/EC-014 | top-errors 和 emerging-patterns 输出正确 | ⬜ 待开始 |
+| EC-027 | §11.3 | 熔断器自动恢复（4h 提醒 + 24h 超时） | EC-010 | 模拟熔断 25h 后自动恢复 | ⬜ 待开始 |
+| EC-028 | §5.5 | `_state` 分支状态清理 | EC-003 | 验证 30 天前的 daily-counters 被清理 | ⬜ 待开始 |
+| EC-029 | §5.4 | 脱敏正则扩展（AWS/GCP/PRIVATE_KEY） | EC-002 | AKIA/PRIVATE_KEY 样本正确脱敏 | ⬜ 待开始 |
+| EC-030 | §4.11 | `auto-fix` action（P3，白名单制） | EC-021/EC-012 | Prettier 格式错误自动生成修复 PR | ⬜ 待开始 |
+| EC-031 | §7.1 | triage-failure 接入 claude-harness（替代 call-glm） | EC-008 | Tier 3 通过 claude-harness 调用 GLM 成功 | ⬜ 待开始 |
+| EC-032 | §12 | onboarded-repos `workflows`/`exclude` 过滤 | EC-001 | 指定 workflow 白名单时只拉取对应 run | ⬜ 待开始 |
 
 每个任务的实现细节（具体 YAML、bash、jq 表达式）在落地 PR 中给出，与本 SPEC 无需同步——**SPEC 只描述契约、不固化实现**。
 
