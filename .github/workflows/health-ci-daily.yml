@@ -77,11 +77,20 @@ jobs:
           echo "$stats" >> "$GITHUB_OUTPUT"
           echo "EVOLVECI_EOF" >> "$GITHUB_OUTPUT"
 
+      - name: Read health history
+        id: history
+        uses: ./actions/observability/state/read-state
+        with:
+          key: "workflow-health"
+          state-path: "workflow-health/all.json"
+          default: '{"workflows":{}}'
+
       - name: Detect degradations
         id: degradations
         shell: bash
         run: |
           STATS='${{ steps.stats.outputs.stats }}'
+          HISTORY='${{ steps.history.outputs.value }}'
           TODAY=$(date -u +%Y-%m-%d)
 
           degradations="[]"
@@ -89,17 +98,10 @@ jobs:
           while IFS= read -r wf; do
             key=$(echo "$wf" | jq -r '.key')
             current_rate=$(echo "$wf" | jq -r '.failure_rate')
-            repo=$(echo "$wf" | jq -r '.repo')
-            workflow=$(echo "$wf" | jq -r '.workflow')
 
-            # Read historical health from _state
-            state_path="workflow-health/$(echo "$key" | tr '/' '-').json"
-            git fetch origin _state --depth=1 2>/dev/null || true
-            history=$(git show "origin/_state:$state_path" 2>/dev/null || echo '{"daily":{}}')
-
-            # Calculate 7-day average
-            seven_day_avg=$(echo "$history" | jq -r '
-              .daily // {} |
+            # Calculate 7-day average from history
+            seven_day_avg=$(echo "$HISTORY" | jq -r --arg k "$key" '
+              .workflows[$k].daily // {} |
               to_entries |
               sort_by(.key) |
               .[-7:] |
@@ -121,45 +123,47 @@ jobs:
           echo "$degradations" >> "$GITHUB_OUTPUT"
           echo "EVOLVECI_EOF" >> "$GITHUB_OUTPUT"
 
-      - name: Update health history
+      - name: Build updated health history
+        id: updated-history
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           STATS='${{ steps.stats.outputs.stats }}'
+          HISTORY='${{ steps.history.outputs.value }}'
           TODAY=$(date -u +%Y-%m-%d)
 
-          # Checkout _state branch
-          git fetch origin _state --depth=1 2>/dev/null || true
-          git checkout -B _state origin/_state 2>/dev/null || {
-            git checkout --orphan _state
-            git rm -rf . 2>/dev/null || true
-            git -c user.name="evolveCI bot" -c user.email="bot@evolveci.dev" \
-              commit --allow-empty -m "init: CI observability state branch"
-          }
-
-          mkdir -p workflow-health
-
+          # Merge today's rates into history
+          updated="$HISTORY"
           while IFS= read -r wf; do
             key=$(echo "$wf" | jq -r '.key')
             rate=$(echo "$wf" | jq -r '.failure_rate')
-            state_path="workflow-health/$(echo "$key" | tr '/' '-').json"
-
-            # Read existing
-            existing=$(cat "$state_path" 2>/dev/null || echo '{"daily":{}}')
-
-            # Merge today's rate
-            updated=$(echo "$existing" | jq --arg d "$TODAY" --argjson r "$rate" '.daily[$d] = $r')
-            echo "$updated" > "$state_path"
+            updated=$(echo "$updated" | jq \
+              --arg k "$key" \
+              --arg d "$TODAY" \
+              --argjson r "$rate" \
+              '.workflows[$k].daily[$d] = $r')
           done < <(echo "$STATS" | jq -c '.[]')
 
-          # Commit and push
-          git add workflow-health/
-          git -c user.name="evolveCI bot" -c user.email="bot@evolveci.dev" \
-            commit -m "state: update health history $TODAY" || true
-          git push origin _state 2>/dev/null || echo "::warning::Failed to push health history"
+          {
+            echo "history<<EVOLVECI_EOF"
+            echo "$updated"
+            echo "EVOLVECI_EOF"
+          } >> "$GITHUB_OUTPUT"
 
-          git checkout - 2>/dev/null || true
+      - name: Write health history
+        uses: ./actions/observability/state/write-state
+        with:
+          key: "workflow-health"
+          state-path: "workflow-health/all.json"
+          value: ${{ steps.updated-history.outputs.history }}
+          merge: "true"
+
+      - name: Compute trends
+        id: trends
+        uses: ./actions/observability/analyzers/compute-trends
+        with:
+          repo: ${{ github.repository }}
+          current-health-data: ${{ steps.updated-history.outputs.history }}
+          token: ${{ secrets.CROSS_REPO_PAT }}
 
       - name: Aggregate output
         id: aggregate
@@ -184,6 +188,8 @@ jobs:
             --argjson rate "$failure_rate" \
             --argjson workflows "$STATS" \
             --argjson degradations "$DEGRADATIONS" \
+            --arg trend "${{ steps.trends.outputs.trend || 'stable' }}" \
+            --argjson delta "${{ steps.trends.outputs.delta || 0 }}" \
             --arg date "$(date -u +%Y-%m-%d)" \
             '{
               date: $date,
@@ -191,7 +197,9 @@ jobs:
               total_failures: $failures,
               failure_rate: $rate,
               workflows: $workflows,
-              degradations: $degradations
+              degradations: $degradations,
+              trend: $trend,
+              trend_delta: $delta,
             }')
 
           {

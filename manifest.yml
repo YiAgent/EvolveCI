@@ -4,30 +4,6 @@ actions:
     version: v4
     sha: 34e114876b0b11c390a56381ad16ebd13914f8d5
 
-  actions/cache:
-    version: v4
-    sha: 0057852bfaa89a56745cba8c7296529d2fc39830
-
   step-security/harden-runner:
     version: v2
     sha: 8d3c67de8e2fe68ef647c8db1e6a09f647780f40
-
-  peter-evans/create-issue-from-file:
-    version: v6
-    sha: fca9117c27cdc29c6c4db3b86c48e4115a786710
-
-  peter-evans/create-pull-request:
-    version: v7
-    sha: 22a9089034f40e5a961c8808d113e2c98fb63676
-
-  nick-fields/retry:
-    version: v3
-    sha: ce71cc2ab81d554ebbe88c79ab5975992d79ba08
-
-  DeveloperMetrics/deployment-frequency:
-    version: main
-    sha: TBD
-
-  DeveloperMetrics/lead-time-for-changes:
-    version: main
-    sha: TBD
