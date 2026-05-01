@@ -66,12 +66,14 @@ runs:
         esac
 
         # Build Slack payload with Block Kit
+        TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
         PAYLOAD=$(jq -n \
           --arg emoji "$EMOJI" \
           --arg title "$TITLE" \
           --arg message "$MESSAGE" \
           --arg color "$COLOR" \
           --arg channel "$CHANNEL" \
+          --arg timestamp "$TIMESTAMP" \
           '{
             blocks: [
               {
@@ -94,7 +96,7 @@ runs:
                 elements: [
                   {
                     type: "mrkdwn",
-                    text: "_EvolveCI | \(now | strftime("%Y-%m-%d %H:%M:%S UTC"))_"
+                    text: "_EvolveCI | \($timestamp)_"
                   }
                 ]
               }

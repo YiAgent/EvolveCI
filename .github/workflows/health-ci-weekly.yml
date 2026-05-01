@@ -26,7 +26,7 @@ jobs:
           egress-policy: audit
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Install yq
         shell: bash
@@ -165,7 +165,7 @@ jobs:
       result: ${{ steps.ai.outputs.result }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: AI synthesis
         id: ai
@@ -189,14 +189,14 @@ jobs:
           egress-policy: audit
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Write report
         shell: bash
+        env:
+          REPORT: ${{ needs.synthesize.outputs.result }}
         run: |
-          cat > /tmp/weekly-report.md << 'REPORT_EOF'
-          ${{ needs.synthesize.outputs.result }}
-          REPORT_EOF
+          printf '%s' "$REPORT" > /tmp/weekly-report.md
 
       - name: Set date
         id: date
@@ -213,8 +213,10 @@ jobs:
       - name: Post Slack report
         continue-on-error: true
         uses: ./actions/observability/publishers/post-slack-report
+        env:
+          REPORT_MSG: ${{ needs.synthesize.outputs.result }}
         with:
           webhook-url: ${{ secrets.SLACK_CI_WEBHOOK }}
           title: "CI Weekly Deep Dive - ${{ steps.date.outputs.week }}"
-          message: ${{ needs.synthesize.outputs.result }}
+          message: ${{ env.REPORT_MSG }}
           status: info
