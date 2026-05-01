@@ -56,8 +56,18 @@ runs:
           exit 0
         fi
 
-        # Extract recent 7 days average and 14-7 days ago average
-        daily=$(echo "$HEALTH_DATA" | jq -r '.daily // {}')
+        # Extract daily data - handle both formats
+        # Format 1: {"daily": {...}} (single workflow)
+        # Format 2: {"workflows": {"key": {"daily": {...}}}} (all workflows)
+        if echo "$HEALTH_DATA" | jq -e '.workflows' >/dev/null 2>&1; then
+          # Aggregate all workflow daily data into a single daily map
+          daily=$(echo "$HEALTH_DATA" | jq '
+            .workflows // {} |
+            [.[].daily // {}] |
+            reduce .[] as $d ({}; . * $d)')
+        else
+          daily=$(echo "$HEALTH_DATA" | jq -r '.daily // {}')
+        fi
 
         # Get today's date
         today=$(date -u +%Y-%m-%d)
