@@ -103,8 +103,6 @@ test_action_structure() {
   local required_actions=(
     "observability/sources/query-github-actions/action.yml"
     "observability/state/redact-log/action.yml"
-    "observability/state/read-state/action.yml"
-    "observability/state/write-state/action.yml"
     "observability/analyzers/match-known-patterns/action.yml"
     "observability/analyzers/classify-heuristic/action.yml"
     "observability/analyzers/classify-ai/action.yml"
@@ -134,7 +132,7 @@ test_action_structure() {
   done
 
   if [ "$missing" -eq 0 ]; then
-    pass "All 16 required actions present"
+    pass "All 18 required actions present"
   fi
 }
 
@@ -144,10 +142,11 @@ test_workflow_structure() {
 
   local workflows_dir="$PROJECT_ROOT/.github/workflows"
   local required_workflows=(
-    "triage-failure.yml"
-    "health-ci-daily.yml"
-    "health-ci-weekly.yml"
-    "heartbeat.yml"
+    "agent-triage.yml"
+    "agent-daily.yml"
+    "agent-weekly.yml"
+    "agent-heartbeat.yml"
+    "test.yml"
   )
 
   for wf in "${required_workflows[@]}"; do
@@ -258,6 +257,82 @@ test_prompts() {
   done
 }
 
+test_agent_memory() {
+  echo ""
+  echo "=== Testing Agent Memory Structure ==="
+
+  # CLAUDE.md
+  if [ -f "$PROJECT_ROOT/CLAUDE.md" ]; then
+    pass "CLAUDE.md exists"
+    if grep -q "被触发时的默认行为" "$PROJECT_ROOT/CLAUDE.md"; then
+      pass "CLAUDE.md has default behavior section"
+    else
+      fail "CLAUDE.md missing default behavior section"
+    fi
+  else
+    fail "CLAUDE.md not found"
+  fi
+
+  # Slash commands
+  local required_commands=(
+    "triage.md"
+    "daily-report.md"
+    "weekly-report.md"
+    "learn-pattern.md"
+    "check-circuit.md"
+    "heartbeat.md"
+  )
+  for cmd in "${required_commands[@]}"; do
+    if [ -f "$PROJECT_ROOT/.claude/commands/$cmd" ]; then
+      pass "Exists: .claude/commands/$cmd"
+    else
+      fail "Missing: .claude/commands/$cmd"
+    fi
+  done
+
+  # Memory directories
+  local required_dirs=(
+    "memory/patterns"
+    "memory/incidents"
+    "memory/stats/daily"
+    "memory/stats/weekly"
+    "memory/fingerprints"
+    "memory/flaky-tests"
+    "memory/circuit"
+    "memory/counters"
+  )
+  for dir in "${required_dirs[@]}"; do
+    if [ -d "$PROJECT_ROOT/$dir" ]; then
+      pass "Exists: $dir/"
+    else
+      fail "Missing: $dir/"
+    fi
+  done
+
+  # Memory key files
+  if [ -f "$PROJECT_ROOT/memory/patterns/known-patterns.json" ]; then
+    pass "memory/patterns/known-patterns.json exists"
+    if python3 -c "import json; d=json.load(open('$PROJECT_ROOT/memory/patterns/known-patterns.json')); assert len(d) >= 10" 2>/dev/null; then
+      pass "known-patterns.json has ≥10 patterns"
+    else
+      fail "known-patterns.json has fewer than 10 patterns"
+    fi
+  else
+    fail "memory/patterns/known-patterns.json not found"
+  fi
+
+  if [ -f "$PROJECT_ROOT/memory/circuit/state.json" ]; then
+    pass "memory/circuit/state.json exists"
+    if python3 -c "import json; d=json.load(open('$PROJECT_ROOT/memory/circuit/state.json')); assert 'active' in d" 2>/dev/null; then
+      pass "memory/circuit/state.json has valid schema"
+    else
+      fail "memory/circuit/state.json missing 'active' field"
+    fi
+  else
+    fail "memory/circuit/state.json not found"
+  fi
+}
+
 # Run all tests
 echo "=========================================="
 echo "  EvolveCI Test Suite"
@@ -269,6 +344,7 @@ test_workflow_structure
 test_data_files
 test_manifest
 test_prompts
+test_agent_memory
 
 # Summary
 echo ""
