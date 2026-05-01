@@ -89,10 +89,16 @@ jobs:
             python3 -c "
           import yaml, sys
           data = yaml.safe_load(open('$f'))
-          required = ['name', 'on', 'jobs']
-          missing = [k for k in required if k not in data]
-          if missing:
-              print(f'ERROR: {missing}')
+          # 'on' is reserved in YAML (becomes True), so check for both
+          has_trigger = 'on' in data or True in data
+          if not has_trigger:
+              print(f'ERROR: missing trigger (on)')
+              sys.exit(1)
+          if 'name' not in data:
+              print(f'ERROR: missing name')
+              sys.exit(1)
+          if 'jobs' not in data:
+              print(f'ERROR: missing jobs')
               sys.exit(1)
           print(f'  OK')
           "
