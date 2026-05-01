@@ -50,7 +50,8 @@ runs:
             # Branch doesn't exist yet — create orphan
             git checkout --orphan _state
             git rm -rf . 2>/dev/null || true
-            git commit --allow-empty -m "init: CI observability state branch"
+            git -c user.name="evolveCI bot" -c user.email="bot@evolveci.dev" \
+              commit --allow-empty -m "init: CI observability state branch"
             git push origin _state
           }
 
