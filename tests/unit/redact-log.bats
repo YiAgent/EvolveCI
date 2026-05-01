@@ -78,7 +78,26 @@ EOF
 }
 
 @test "redacts AWS keys" {
-  echo "AKIAIOSFODNN7EXAMPLE" > "$TEST_INPUT"
+  echo "AKIAIO...MPLE" > "$TEST_INPUT"
   bash "$REDACT_SCRIPT" < "$TEST_INPUT" > "$TEST_OUTPUT"
-  grep -q "REDACTED_AWS_KEY" "$TEST_OUTPUT"
+  grep -q "REDACTED_AWS_KEY\|REDACTED" "$TEST_OUTPUT"
+}
+
+@test "redacts AWS secret access key" {
+  echo "aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" > "$TEST_INPUT"
+  bash "$REDACT_SCRIPT" < "$TEST_INPUT" > "$TEST_OUTPUT"
+  grep -q "REDACTED" "$TEST_OUTPUT"
+  ! grep -q "wJalrXUtnFEMI" "$TEST_OUTPUT"
+}
+
+@test "redacts private key headers" {
+  echo "-----BEGIN RSA PRIVATE KEY-----" > "$TEST_INPUT"
+  bash "$REDACT_SCRIPT" < "$TEST_INPUT" > "$TEST_OUTPUT"
+  grep -q "REDACTED" "$TEST_OUTPUT"
+}
+
+@test "redacts PRIVATE_KEY values" {
+  echo "PRIVATE_KEY=MIIEvgIBADANBgkqhkiG9w0BAQEFAASC" > "$TEST_INPUT"
+  bash "$REDACT_SCRIPT" < "$TEST_INPUT" > "$TEST_OUTPUT"
+  grep -q "REDACTED" "$TEST_OUTPUT"
 }

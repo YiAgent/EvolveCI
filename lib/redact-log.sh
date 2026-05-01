@@ -15,4 +15,9 @@ sed -E \
   -e 's/ghp_[a-zA-Z0-9]{36}/ghp_***REDACTED***/g' \
   -e 's/gho_[a-zA-Z0-9]{36}/gho_***REDACTED***/g' \
   -e 's/sk-[a-zA-Z0-9]{20,}/sk-***REDACTED***/g' \
-  -e 's/(10|172|192)\.[0-9]+\.[0-9]+\.[0-9]+/***REDACTED_IP***/g'
+  -e 's/(10|172|192)\.[0-9]+\.[0-9]+\.[0-9]+/***REDACTED_IP***/g' \
+  -e 's/AKIA[0-9A-Z]{16}/AKIA***REDACTED***/g' \
+  -e 's/-----BEGIN.*PRIVATE KEY-----/***REDACTED_PRIVATE_KEY***/g' \
+  -e 's/PRIVATE_KEY\s*=\s*[a-zA-Z0-9+/=]{20,}/PRIVATE_KEY=***REDACTED***/g' \
+  -e 's/[Aa][Ww][Ss]_[Ss]ecret_[Aa]ccess_[Kk]ey\s*=\s*[a-zA-Z0-9+/=]+/***REDACTED_AWS***/g' \
+  -e 's/[Aa][Ww][Ss]_[Aa]ccess_[Kk]ey_[Ii][Dd]\s*=\s*[a-zA-Z0-9+/=]+/***REDACTED_AWS***/g'

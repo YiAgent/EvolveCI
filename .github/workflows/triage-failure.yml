@@ -159,6 +159,61 @@ jobs:
         with:
           log: ${{ matrix.run.log_base64 || '' }}
 
+      # 生成错误指纹: 从日志中提取错误行，sha256 取前 12 位作为唯一标识
+      # 用于后续聚类去重和 retry 判断
+      - name: Error fingerprint
+        id: fingerprint
+        if: matrix.run.conclusion == 'failure'
+        uses: ./actions/observability/analyzers/error-fingerprint
+        with:
+          log: ${{ steps.redact.outputs.redacted || '' }}
+          failed-step: ${{ fromJson(matrix.run.failed_jobs || '[]')[0].steps[0] || '' }}
+
+      # Retry 去重检查: 如果 fingerprint 在已知模式中且 auto_rerun=true
+      # 且当日 retry < 2 次，直接 retry 跳过后续 triage
+      - name: Check retry eligibility
+        id: retry-check
+        if: matrix.run.conclusion == 'failure' && steps.fingerprint.outputs.fingerprint != ''
+        shell: bash
+        run: |
+          FP="${{ steps.fingerprint.outputs.fingerprint }}"
+          TODAY=$(date -u +%Y-%m-%d)
+          PATTERNS_PATH="${{ steps.patterns.outputs.path }}"
+
+          # Check if fingerprint matches a known pattern with auto_rerun=true
+          AUTO_RERUN=$(jq -r --arg fp "$FP" \
+            '[.[] | select(.id | endswith($fp[0:8])) | .auto_rerun] | first // false' \
+            "$PATTERNS_PATH" 2>/dev/null || echo "false")
+
+          if [ "$AUTO_RERUN" != "true" ]; then
+            echo "should-retry=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Read retry counter for this fingerprint today
+          COUNTER_KEY="retry:${FP}:${TODAY}"
+          retry_count=0
+          if [ -f ".state-cache/data.json" ]; then
+            retry_count=$(jq -r --arg k "$COUNTER_KEY" '.[$k] // 0' ".state-cache/data.json" 2>/dev/null || echo 0)
+          fi
+
+          if [ "$retry_count" -ge 2 ]; then
+            echo "::notice::Fingerprint $FP already retried $retry_count times today, entering triage"
+            echo "should-retry=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should-retry=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 执行 retry（仅当 eligible）
+      - name: Auto retry
+        if: steps.retry-check.outputs.should-retry == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_PAT }}
+        run: |
+          gh run rerun "${{ matrix.run.databaseId }}" --repo "${{ matrix.run.repo }}" --failed 2>/dev/null || true
+          echo "::notice::Auto-retried run ${{ matrix.run.databaseId }} (fingerprint: ${{ steps.fingerprint.outputs.fingerprint }})"
+
       # ── Tier 1: 精确匹配 ──
       # 用正则匹配已知模式库，命中率高、零成本、即时分类
       - name: Tier 1 - Match known patterns
@@ -224,7 +279,7 @@ jobs:
           model: ${{ secrets.GLM_MODEL }}
 
       # 汇总 3 层结果，按优先级取最高级: T1 > T2(high/medium) > T3 > 默认
-      # 输出: category, severity, should-rerun, should-notify, summary
+      # 输出: category, severity, should-rerun, should-notify, summary, fingerprint
       - name: Dispatch classification
         id: dispatch
         shell: bash
@@ -281,6 +336,9 @@ jobs:
             tier="none"
           fi
 
+          # Inject fingerprint from dedicated step
+          fingerprint="${{ steps.fingerprint.outputs.fingerprint }}"
+
           {
             echo "category=$category"
             echo "severity=$severity"
@@ -289,6 +347,7 @@ jobs:
             echo "summary=$summary"
             echo "tier=$tier"
             echo "matched-pattern=$matched_pattern"
+            echo "fingerprint=$fingerprint"
           } >> "$GITHUB_OUTPUT"
 
       # 如果分类结果建议重跑，触发 workflow re-run（受日预算限制）
@@ -302,6 +361,17 @@ jobs:
           workflow-name: ${{ matrix.run.workflowName }}
           daily-budget: "3"
           token: ${{ secrets.CROSS_REPO_PAT }}
+
+      # 跟踪 flaky test: 从日志提取 test case 名称，维护注册表
+      - name: Track flaky tests
+        id: flaky-tests
+        if: matrix.run.conclusion == 'failure' && steps.redact.outputs.redacted != ''
+        uses: ./actions/observability/analyzers/track-flaky-tests
+        with:
+          log: ${{ steps.redact.outputs.redacted || '' }}
+          repo: ${{ matrix.run.repo }}
+          workflow-name: ${{ matrix.run.workflowName }}
+          run-id: ${{ matrix.run.databaseId }}
 
       # 读取今日重跑计数器（从 _state 分支），用于预算检查
       - name: Read rerun counter
@@ -396,7 +466,7 @@ jobs:
           reason: ${{ steps.budget-check.outputs.reason }}
           dimension: workflow
 
-      # 创建或更新 GitHub Issue: 去重检查 → 新建或追加评论
+      # 创建或更新 GitHub Issue: 用 fingerprint 精确去重
       # flaky 类型不建 issue（避免噪音）
       - name: Create issue
         if: steps.dispatch.outputs.should-notify == 'true' && steps.dispatch.outputs.category != 'flaky'
@@ -410,34 +480,34 @@ jobs:
           WORKFLOW="${{ matrix.run.workflowName }}"
           REPO="${{ matrix.run.repo }}"
           TIER="${{ steps.dispatch.outputs.tier }}"
+          FINGERPRINT="${{ steps.dispatch.outputs.fingerprint }}"
 
           TITLE="CI [$CATEGORY]: $WORKFLOW - $SUMMARY"
 
-          # Check for existing open issue (dedup)
-          existing=$(gh issue list \
-            --label "ci/$CATEGORY" \
-            --state open \
-            --search "\"$WORKFLOW\" in:title" \
-            --json number \
-            --jq 'length')
-
-          if [ "$existing" -gt 0 ]; then
-            # Add comment to existing issue
-            issue_number=$(gh issue list \
+          # Fingerprint-based dedup: search for existing issue with this fingerprint in body
+          if [ -n "$FINGERPRINT" ]; then
+            existing=$(gh issue list \
               --label "ci/$CATEGORY" \
               --state open \
-              --search "\"$WORKFLOW\" in:title" \
+              --search "\"$FINGERPRINT\" in:body" \
               --json number \
-              --jq '.[0].number')
+              --jq '.[0].number // empty')
+          else
+            existing=""
+          fi
 
+          if [ -n "$existing" ]; then
+            # Add comment to existing issue (fingerprint match)
             BODY="### Recurrence (Tier $TIER)
 
           - **Repo**: $REPO
           - **Run**: ${{ matrix.run.databaseId }}
           - **Summary**: $SUMMARY
+          - **Fingerprint**: \`$FINGERPRINT\`
           - **Time**: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-            gh issue comment "$issue_number" --body "$BODY"
+            gh issue comment "$existing" --body "$BODY"
+            echo "::notice::Commented on existing issue #$existing (fingerprint: $FINGERPRINT)"
           else
             # Create new issue
             BODY="## CI Failure: $WORKFLOW
@@ -448,6 +518,7 @@ jobs:
           - **Classification Tier**: $TIER
           - **Summary**: $SUMMARY
           - **Run ID**: ${{ matrix.run.databaseId }}
+          - **Fingerprint**: \`$FINGERPRINT\`
 
           ### Failed Jobs
           \`\`\`json
@@ -457,11 +528,29 @@ jobs:
           ---
           _Automated by evolveCI triage_"
 
+            LABELS="ci/$CATEGORY,severity/$SEVERITY"
+            if [ -n "$FINGERPRINT" ]; then
+              LABELS="$LABELS,fingerprint/$FINGERPRINT"
+            fi
+
             gh issue create \
               --title "$TITLE" \
               --body "$BODY" \
-              --label "ci/$CATEGORY,severity/$SEVERITY"
+              --label "$LABELS"
           fi
+
+      # 多渠道通知: 根据 severity 分发到 Slack + Discord
+      - name: Multi-channel notification
+        if: steps.dispatch.outputs.severity == 'critical' || steps.dispatch.outputs.severity == 'high'
+        continue-on-error: true
+        uses: ./actions/observability/publishers/post-notification
+        with:
+          title: "CI Alert: ${{ matrix.run.workflowName }}"
+          message: "${{ steps.dispatch.outputs.summary }} (repo: ${{ matrix.run.repo }}, run: ${{ matrix.run.databaseId }})"
+          severity: ${{ steps.dispatch.outputs.severity }}
+          slack-webhook: ${{ secrets.SLACK_CI_WEBHOOK }}
+          discord-webhook: ${{ secrets.DISCORD_CI_WEBHOOK }}
+          repo: ${{ matrix.run.repo }}
 
       # critical/high 级别发送 Slack 告警
       - name: Slack notification
@@ -536,3 +625,41 @@ jobs:
           ---
           _Automated by evolveCI_" \
             2>/dev/null || echo "::warning::PR creation failed (may need manual review)"
+
+      # 写入 fingerprint 记录到 _state 分支（用于聚类和趋势分析）
+      - name: Write fingerprint record
+        if: steps.dispatch.outputs.fingerprint != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FP="${{ steps.dispatch.outputs.fingerprint }}"
+          TODAY=$(date -u +%Y-%m-%d)
+          CATEGORY="${{ steps.dispatch.outputs.category }}"
+          RUN_ID="${{ matrix.run.databaseId }}"
+
+          if [ -z "$FP" ]; then
+            exit 0
+          fi
+
+          # Check if fingerprint file exists on _state
+          git fetch origin _state --depth=1 2>/dev/null || true
+          existing=""
+          if git show "origin/_state:fingerprints/${FP}.json" 2>/dev/null > /tmp/fp-existing.json; then
+            existing="true"
+          fi
+
+          if [ -n "$existing" ]; then
+            # Update existing: increment count, update last_seen, append run_id
+            jq --arg run "$RUN_ID" --arg today "$TODAY" \
+              '.count += 1 | .last_seen = $today | .linked_runs += [$run] | .linked_runs = (.linked_runs | .[-20:])' \
+              /tmp/fp-existing.json > /tmp/fp-updated.json
+          else
+            # Create new
+            jq -n \
+              --arg fp "$FP" --arg cat "$CATEGORY" --arg run "$RUN_ID" --arg today "$TODAY" \
+              '{fingerprint: $fp, first_seen: $today, last_seen: $today, count: 1, category: $cat, source: "triage", linked_runs: [$run]}' \
+              > /tmp/fp-updated.json
+          fi
+
+          echo "::notice::Fingerprint record prepared: $FP"

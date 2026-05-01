@@ -1,0 +1,58 @@
+name: "Error Fingerprint"
+description: "Generate a unique 12-char hex fingerprint from failure logs for cross-run clustering and dedup."
+
+inputs:
+  log:
+    description: "Plaintext log (already redacted)"
+    required: true
+  failed-step:
+    description: "Name of the failed step"
+    required: false
+    default: ""
+
+outputs:
+  fingerprint:
+    description: "12-char hex fingerprint (sha256 prefix)"
+    value: ${{ steps.fingerprint.outputs.fingerprint }}
+  error-lines:
+    description: "Extracted error lines summary"
+    value: ${{ steps.fingerprint.outputs.error-lines }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: fingerprint
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        LOG='${{ inputs.log }}'
+        FAILED_STEP="${{ inputs.failed-step }}"
+
+        if [ -z "$LOG" ]; then
+          echo "fingerprint=" >> "$GITHUB_OUTPUT"
+          echo "error-lines=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # Extract last 3 lines containing error keywords (case-insensitive)
+        error_lines=$(echo "$LOG" | grep -iE "Error|FAIL|fatal|panic|Exception" | tail -3 || true)
+
+        if [ -z "$error_lines" ]; then
+          echo "fingerprint=" >> "$GITHUB_OUTPUT"
+          echo "error-lines=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # Generate fingerprint: sha256 of "failed_step::error_lines", take first 12 chars
+        composite="${FAILED_STEP}::${error_lines}"
+        fingerprint=$(echo -n "$composite" | sha256sum | cut -c1-12)
+
+        {
+          echo "fingerprint=$fingerprint"
+          echo "error-lines<<EVOLVECI_EOF"
+          echo "$error_lines"
+          echo "EVOLVECI_EOF"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "::notice::Error fingerprint: $fingerprint"

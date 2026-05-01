@@ -130,3 +130,120 @@ jobs:
           fi
 
           echo "::notice::Heartbeat OK"
+
+      # 熔断器自动恢复: 检查 ci:circuit-broken issue 的创建时间
+      # 4h 后添加提醒 comment，24h 后自动移除 label
+      - name: Circuit breaker auto-recovery
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Find open circuit breaker issues
+          issues=$(gh issue list \
+            --label "ci:circuit-broken" \
+            --state open \
+            --json number,createdAt \
+            --jq '.[] | @base64' 2>/dev/null || true)
+
+          if [ -z "$issues" ]; then
+            echo "::notice::No active circuit breakers"
+            exit 0
+          fi
+
+          NOW_EPOCH=$(date +%s)
+
+          for issue_b64 in $issues; do
+            NUMBER=$(echo "$issue_b64" | base64 -d | jq -r '.number')
+            CREATED=$(echo "$issue_b64" | base64 -d | jq -r '.createdAt')
+
+            # Parse created time to epoch
+            CREATED_EPOCH=$(date -d "$CREATED" +%s 2>/dev/null || \
+                            date -j -f "%Y-%m-%dT%H:%M:%SZ" "$CREATED" +%s 2>/dev/null || \
+                            echo "$NOW_EPOCH")
+
+            HOURS_AGO=$(( (NOW_EPOCH - CREATED_EPOCH) / 3600 ))
+
+            if [ "$HOURS_AGO" -ge 24 ]; then
+              # Auto-recover: remove label
+              gh issue edit "$NUMBER" --remove-label "ci:circuit-broken" 2>/dev/null || true
+              gh issue comment "$NUMBER" --body "🔄 **Auto-recovered** after 24h timeout.
+
+          Circuit breaker was active for ${HOURS_AGO}h. If the underlying issue persists, investigate and re-trip manually.
+
+          _Automated by evolveCI heartbeat_" 2>/dev/null || true
+              echo "::notice::Auto-recovered circuit breaker issue #${NUMBER} after ${HOURS_AGO}h"
+            elif [ "$HOURS_AGO" -ge 4 ]; then
+              # Add warning comment (only once — check if we already warned)
+                existing_comments=$(gh issue view "$NUMBER" --json comments \
+                  --jq '[.comments[].body | select(contains("Circuit breaker active for"))] | length' 2>/dev/null || echo 0)
+
+                if [ "$existing_comments" -eq 0 ]; then
+                gh issue comment "$NUMBER" --body "⚠️ **Circuit breaker active for ${HOURS_AGO}h.**
+
+          Please review the underlying issue or remove the \`ci:circuit-broken\` label to resume auto-triage.
+
+          _Automated by evolveCI heartbeat_" 2>/dev/null || true
+                echo "::notice::Warning comment added to issue #${NUMBER} (${HOURS_AGO}h active)"
+              fi
+            fi
+          done
+
+      # 状态清理: 清理 _state 分支上的过期数据
+      # daily-counters 保留 30 天, retry-counters 保留 7 天
+      - name: State cleanup
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Only run cleanup on Sundays (day 0)
+          DAY_OF_WEEK=$(date -u +%u)
+          if [ "$DAY_OF_WEEK" != "7" ]; then
+            echo "::notice::State cleanup skipped (only runs on Sunday, today is day $DAY_OF_WEEK)"
+            exit 0
+          fi
+
+          git fetch origin _state --depth=1 2>/dev/null || exit 0
+          git checkout -B _state origin/_state 2>/dev/null || exit 0
+
+          CUTOFF_30D=$(date -u -d "30 days ago" +%Y-%m-%d 2>/dev/null || \
+                      date -u -v-30d +%Y-%m-%d 2>/dev/null || echo "")
+          CUTOFF_7D=$(date -u -d "7 days ago" +%Y-%m-%d 2>/dev/null || \
+                     date -u -v-7d +%Y-%m-%d 2>/dev/null || echo "")
+
+          CLEANED=0
+
+          # Clean daily-counters (30 days)
+          if [ -n "$CUTOFF_30D" ] && [ -d "daily-counters" ]; then
+            for f in daily-counters/*.json; do
+              [ -f "$f" ] || continue
+              file_date=$(basename "$f" .json)
+              if [[ "$file_date" < "$CUTOFF_30D" ]]; then
+                rm -f "$f"
+                CLEANED=$((CLEANED + 1))
+              fi
+            done
+          fi
+
+          # Clean retry-counters (7 days)
+          if [ -n "$CUTOFF_7D" ] && [ -d "retry-counters" ]; then
+            find retry-counters -name "*.json" -type f | while read f; do
+              file_date=$(basename "$f" .json)
+              if [[ "$file_date" < "$CUTOFF_7D" ]]; then
+                rm -f "$f"
+                CLEANED=$((CLEANED + 1))
+              fi
+            done
+          fi
+
+          if [ "$CLEANED" -gt 0 ]; then
+            git config user.name "evolveCI bot"
+            git config user.email "bot@evolveci.dev"
+            git add -A
+            git commit -m "chore: state cleanup — removed $CLEANED expired files" || true
+            git push origin _state 2>/dev/null || echo "::warning::State cleanup push failed"
+            echo "::notice::State cleanup: removed $CLEANED expired files"
+          else
+            echo "::notice::State cleanup: nothing to clean"
+          fi

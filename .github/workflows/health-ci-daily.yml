@@ -181,6 +181,14 @@ jobs:
           current-health-data: ${{ steps.updated-history.outputs.history }}
           token: ${{ secrets.CROSS_REPO_PAT }}
 
+      # 计算错误维度趋势: top errors、emerging patterns、workflow instability
+      - name: Compute error trends
+        id: error-trends
+        uses: ./actions/observability/analyzers/compute-error-trends
+        with:
+          lookback-days: "7"
+          token: ${{ secrets.CROSS_REPO_PAT }}
+
       # 聚合所有数据为 JSON，传递给 synthesize job
       - name: Aggregate output
         id: aggregate
@@ -207,6 +215,8 @@ jobs:
             --argjson degradations "$DEGRADATIONS" \
             --arg trend "${{ steps.trends.outputs.trend || 'stable' }}" \
             --argjson delta "${{ steps.trends.outputs.delta || 0 }}" \
+            --argjson top_errors '${{ steps.error-trends.outputs.top-errors || '[]' }}' \
+            --argjson emerging '${{ steps.error-trends.outputs.emerging-patterns || '[]' }}' \
             --arg date "$(date -u +%Y-%m-%d)" \
             '{
               date: $date,
@@ -217,6 +227,8 @@ jobs:
               degradations: $degradations,
               trend: $trend,
               trend_delta: $delta,
+              top_errors: $top_errors,
+              emerging_patterns: $emerging,
             }')
 
           {

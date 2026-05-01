@@ -20,10 +20,15 @@ setup() {
     "observability/analyzers/compute-flakiness/action.yml"
     "observability/analyzers/compute-mttr/action.yml"
     "observability/analyzers/compute-trends/action.yml"
+    "observability/analyzers/error-fingerprint/action.yml"
+    "observability/analyzers/track-flaky-tests/action.yml"
+    "observability/analyzers/compute-error-trends/action.yml"
     "observability/publishers/auto-rerun/action.yml"
     "observability/publishers/trip-circuit-breaker/action.yml"
     "observability/publishers/post-issue-report/action.yml"
     "observability/publishers/post-slack-report/action.yml"
+    "observability/publishers/post-notification/action.yml"
+    "observability/publishers/auto-fix/action.yml"
     "observability/publishers/slack-notify/action.yml"
   )
 
