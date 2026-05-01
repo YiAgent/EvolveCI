@@ -50,6 +50,8 @@ runs:
           args+=(--assignee "$ASSIGNEES")
         fi
 
-        gh issue create "${args[@]}" 2>/dev/null
+        if ! gh issue create "${args[@]}"; then
+          echo "::warning::Failed to create issue (may already exist or permissions issue)"
+        fi
 
-        echo "::notice::Created issue: $TITLE"
+        echo "::notice::Issue processing complete: $TITLE"
