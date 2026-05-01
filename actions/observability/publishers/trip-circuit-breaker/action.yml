@@ -37,28 +37,26 @@ runs:
 
         TITLE="[Circuit Breaker] $REPO/$WORKFLOW - $DIMENSION budget exceeded"
 
-        BODY=$(cat <<EOF
-## Circuit Breaker Tripped
+        BODY="## Circuit Breaker Tripped
 
-- **Repository**: $REPO
-- **Workflow**: $WORKFLOW
-- **Dimension**: $DIMENSION
-- **Reason**: $REASON
+        - **Repository**: $REPO
+        - **Workflow**: $WORKFLOW
+        - **Dimension**: $DIMENSION
+        - **Reason**: $REASON
 
-### Recent History
+        ### Recent History
 
-\`\`\`json
-$HISTORY
-\`\`\`
+        \`\`\`json
+        $HISTORY
+        \`\`\`
 
-### Recovery
+        ### Recovery
 
-Remove the \`ci:circuit-broken\` label from this issue to resume auto-triage.
+        Remove the \`ci:circuit-broken\` label from this issue to resume auto-triage.
 
----
-_Automated by evolveCI_
-EOF
-        )
+        ---
+        _Automated by evolveCI_"
+
 
         # Create issue
         gh issue create \
