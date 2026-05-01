@@ -21,8 +21,8 @@ jobs:
       contents: read
       actions: read
     outputs:
-      runs: ${{ steps.query.outputs.runs }}
-      failure-count: ${{ steps.query.outputs.failure-count }}
+      runs: ${{ steps.limit.outputs.runs }}
+      failure-count: ${{ steps.limit.outputs.failure-count }}
       skip: ${{ steps.circuit.outputs.skip }}
     steps:
       - name: Harden runner
@@ -78,6 +78,21 @@ jobs:
           log-tail: "100"
           token: ${{ secrets.CROSS_REPO_PAT }}
 
+      - name: Limit to top 10 failures
+        id: limit
+        if: steps.circuit.outputs.skip != 'true'
+        shell: bash
+        run: |
+          RUNS='${{ steps.query.outputs.runs }}'
+          limited=$(echo "$RUNS" | jq '.[0:10]')
+          {
+            echo "runs<<EVOLVECI_EOF"
+            echo "$limited"
+            echo "EVOLVECI_EOF"
+          } >> "$GITHUB_OUTPUT"
+          count=$(echo "$limited" | jq 'length')
+          echo "failure-count=$count" >> "$GITHUB_OUTPUT"
+
   triage:
     needs: scan
     if: needs.scan.outputs.skip != 'true' && needs.scan.outputs.failure-count != '0' && fromJson(needs.scan.outputs.runs || '[]') != []
@@ -91,7 +106,7 @@ jobs:
       max-parallel: 3
       fail-fast: false
       matrix:
-        run: ${{ fromJson(needs.scan.outputs.runs)[0:10] }}
+        run: ${{ fromJson(needs.scan.outputs.runs) }}
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40
