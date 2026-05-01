@@ -15,13 +15,13 @@ permissions:
 
 jobs:
   collect:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith
     timeout-minutes: 15
     outputs:
       stats: ${{ steps.aggregate.outputs.stats }}
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@<SHA>
+        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40
         with:
           egress-policy: audit
 
@@ -180,7 +180,7 @@ jobs:
   synthesize:
     needs: collect
     if: needs.collect.outputs.stats != '' && needs.collect.outputs.stats != '{}'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith
     timeout-minutes: 5
     outputs:
       result: ${{ steps.ai.outputs.result }}
@@ -201,11 +201,11 @@ jobs:
   publish:
     needs: synthesize
     if: needs.synthesize.outputs.result != ''
-    runs-on: ubuntu-latest
+    runs-on: blacksmith
     timeout-minutes: 5
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@<SHA>
+        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40
         with:
           egress-policy: audit
 

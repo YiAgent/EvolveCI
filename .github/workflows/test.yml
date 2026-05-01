@@ -1,0 +1,100 @@
+name: "Tests"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: blacksmith
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run tests
+        shell: bash
+        run: |
+          chmod +x tests/run-tests.sh
+          bash tests/run-tests.sh
+
+  validate-actions:
+    runs-on: blacksmith
+    timeout-minutes: 5
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate action structure
+        shell: bash
+        run: |
+          echo "Validating action.yml files..."
+          find actions -name "action.yml" | while read f; do
+            echo "  Checking $f"
+            python3 -c "
+          import yaml, sys
+          data = yaml.safe_load(open('$f'))
+          required = ['name', 'description', 'runs']
+          missing = [k for k in required if k not in data]
+          if missing:
+              print(f'ERROR: {missing}')
+              sys.exit(1)
+          runs = data.get('runs', {})
+          if runs.get('using') not in ['composite', 'node16', 'node20']:
+              print(f'ERROR: invalid runs.using')
+              sys.exit(1)
+          print(f'  OK')
+          "
+          done
+          echo "All actions valid."
+
+  validate-workflows:
+    runs-on: blacksmith
+    timeout-minutes: 5
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate workflow structure
+        shell: bash
+        run: |
+          echo "Validating workflow files..."
+          find .github/workflows -name "*.yml" | while read f; do
+            echo "  Checking $f"
+            python3 -c "
+          import yaml, sys
+          data = yaml.safe_load(open('$f'))
+          required = ['name', 'on', 'jobs']
+          missing = [k for k in required if k not in data]
+          if missing:
+              print(f'ERROR: {missing}')
+              sys.exit(1)
+          print(f'  OK')
+          "
+          done
+          echo "All workflows valid."

@@ -13,7 +13,7 @@ permissions: {}
 
 jobs:
   scan:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith
     timeout-minutes: 10
     permissions:
       contents: read
@@ -24,7 +24,7 @@ jobs:
       skip: ${{ steps.circuit.outputs.skip }}
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@<SHA>
+        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40
         with:
           egress-policy: audit
 
@@ -73,7 +73,7 @@ jobs:
   triage:
     needs: scan
     if: needs.scan.outputs.skip != 'true' && needs.scan.outputs.failure-count != '0' && fromJson(needs.scan.outputs.runs || '[]') != []
-    runs-on: ubuntu-latest
+    runs-on: blacksmith
     timeout-minutes: 15
     permissions:
       contents: write
@@ -85,7 +85,7 @@ jobs:
         run: ${{ fromJson(needs.scan.outputs.runs) }}
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@<SHA>
+        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40
         with:
           egress-policy: audit
 
@@ -335,7 +335,7 @@ jobs:
       - name: Slack notification
         if: steps.dispatch.outputs.severity == 'critical' || steps.dispatch.outputs.severity == 'high'
         continue-on-error: true
-        uses: your-org/openCI/actions/integrations/slack-notify@v2
+        uses: ./actions/observability/publishers/slack-notify
         with:
           webhook-url: ${{ secrets.SLACK_CI_WEBHOOK }}
           title: "CI Alert: ${{ matrix.run.workflowName }}"

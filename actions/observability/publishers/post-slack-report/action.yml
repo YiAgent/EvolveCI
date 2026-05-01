@@ -1,5 +1,5 @@
 name: "Post Slack Report"
-description: "Send structured Slack message via OpenCI slack-notify."
+description: "Send structured Slack report via incoming webhook."
 
 inputs:
   webhook-url:
