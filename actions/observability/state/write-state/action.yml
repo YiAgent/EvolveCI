@@ -35,6 +35,9 @@ runs:
         MAX_ATTEMPTS=3
         RETRY_WAIT=5
 
+        # Save the original branch/commit so we can restore it after writing to _state
+        ORIGINAL_REF=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || git rev-parse HEAD)
+
         # Step 1: Write to local cache
         mkdir -p "$CACHE_DIR"
         echo "$VALUE" > "$CACHE_FILE"
@@ -75,8 +78,8 @@ runs:
             echo "::notice::Wrote $KEY to _state branch"
             echo "::endgroup::"
 
-            # Return to previous branch
-            git checkout - 2>/dev/null || true
+            # Return to original branch/commit
+            git checkout "$ORIGINAL_REF" 2>/dev/null || true
             exit 0
           fi
 
@@ -86,5 +89,5 @@ runs:
         done
 
         echo "::error::Failed to write $STATE_PATH after $MAX_ATTEMPTS attempts"
-        git checkout - 2>/dev/null || true
+        git checkout "$ORIGINAL_REF" 2>/dev/null || true
         exit 1
