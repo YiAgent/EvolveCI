@@ -19,21 +19,28 @@ jobs:
     timeout-minutes: 20
     outputs:
       weekly-data: ${{ steps.aggregate.outputs.weekly-data }}
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # collect job: 采集 7 天 CI 数据，按仓库分组，对比上周快照
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     steps:
+      # 安全加固
       - name: Harden runner
         uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40
         with:
           egress-policy: audit
 
+      # 拉取代码
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
+      # 安装 yq
       - name: Install yq
         shell: bash
         run: |
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
+      # 读取监控仓库列表
       - name: Load onboarded repos
         id: repos
         shell: bash
@@ -41,6 +48,7 @@ jobs:
           repos=$(yq -r '.repos[].name' data/onboarded-repos.yml | paste -sd, -)
           echo "repos=$repos" >> "$GITHUB_OUTPUT"
 
+      # 拉取所有仓库最近 7 天的 workflow run
       - name: Query GitHub Actions
         id: query
         uses: ./actions/observability/sources/query-github-actions
@@ -51,6 +59,7 @@ jobs:
           include-logs: "false"
           token: ${{ secrets.CROSS_REPO_PAT }}
 
+      # 按仓库 + workflow 分组统计周数据
       - name: Compute weekly stats
         id: stats
         shell: bash
@@ -83,6 +92,7 @@ jobs:
           echo "$repo_stats" >> "$GITHUB_OUTPUT"
           echo "EVOLVECI_EOF" >> "$GITHUB_OUTPUT"
 
+      # 计算本周/上周的 ISO 周号，用于快照路径
       - name: Compute week dates
         id: dates
         shell: bash
@@ -94,6 +104,7 @@ jobs:
           echo "snapshot-path=weekly-snapshots/$this_week.json" >> "$GITHUB_OUTPUT"
           echo "previous-path=weekly-snapshots/$last_week.json" >> "$GITHUB_OUTPUT"
 
+      # 从 _state 分支读取上周快照（用于对比）
       - name: Read previous snapshot
         id: previous
         uses: ./actions/observability/state/read-state
@@ -102,6 +113,7 @@ jobs:
           state-path: ${{ steps.dates.outputs.previous-path }}
           default: "{}"
 
+      # 构建本周快照 JSON
       - name: Build current snapshot
         id: current-snapshot
         shell: bash
@@ -118,6 +130,7 @@ jobs:
             echo "EVOLVECI_EOF"
           } >> "$GITHUB_OUTPUT"
 
+      # 保存本周快照到 _state 分支
       - name: Save current snapshot
         uses: ./actions/observability/state/write-state
         with:
@@ -126,6 +139,7 @@ jobs:
           value: ${{ steps.current-snapshot.outputs.snapshot }}
           merge: "false"
 
+      # 聚合当前 + 上周数据，传递给 synthesize job
       - name: Aggregate output
         id: aggregate
         shell: bash
@@ -145,6 +159,9 @@ jobs:
             echo "EVOLVECI_EOF"
           } >> "$GITHUB_OUTPUT"
 
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  # synthesize job: 调用 AI 生成深度周报
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   synthesize:
     needs: collect
     if: needs.collect.outputs.weekly-data != '' && needs.collect.outputs.weekly-data != '{}'
@@ -156,6 +173,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
+      # 将周数据 + 上周对比传给 GLM，生成深度分析周报
       - name: AI synthesis
         id: ai
         uses: ./actions/observability/analyzers/call-glm
@@ -166,6 +184,9 @@ jobs:
           base-url: ${{ secrets.GLM_BASE_URL }}
           model: ${{ secrets.GLM_MODEL }}
 
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  # publish job: 发布周报
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   publish:
     needs: synthesize
     if: needs.synthesize.outputs.result != ''
@@ -180,6 +201,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
+      # 写入临时文件
       - name: Write report
         shell: bash
         env:
@@ -187,11 +209,13 @@ jobs:
         run: |
           printf '%s' "$REPORT" > /tmp/weekly-report.md
 
+      # 获取本周 ISO 周号
       - name: Set date
         id: date
         shell: bash
         run: echo "week=$(date -u +%Y-W%V)" >> "$GITHUB_OUTPUT"
 
+      # 创建 GitHub Issue（CI Weekly Deep Dive）
       - name: Post issue report
         uses: ./actions/observability/publishers/post-issue-report
         with:
@@ -199,6 +223,7 @@ jobs:
           report-path: /tmp/weekly-report.md
           labels: "weekly-report,ci-health"
 
+      # 发送到 Slack
       - name: Post Slack report
         continue-on-error: true
         uses: ./actions/observability/publishers/post-slack-report

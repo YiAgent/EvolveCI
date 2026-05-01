@@ -19,21 +19,28 @@ jobs:
     timeout-minutes: 15
     outputs:
       stats: ${{ steps.aggregate.outputs.stats }}
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # collect job: 采集所有监控仓库的 24h CI 数据，计算统计指标
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     steps:
+      # 安全加固
       - name: Harden runner
         uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40
         with:
           egress-policy: audit
 
+      # 拉取代码
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
+      # 安装 yq
       - name: Install yq
         shell: bash
         run: |
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
+      # 读取监控仓库列表
       - name: Load onboarded repos
         id: repos
         shell: bash
@@ -41,6 +48,7 @@ jobs:
           repos=$(yq -r '.repos[].name' data/onboarded-repos.yml | paste -sd, -)
           echo "repos=$repos" >> "$GITHUB_OUTPUT"
 
+      # 拉取所有仓库最近 24h 的 workflow run（不含日志，只看结果）
       - name: Query GitHub Actions
         id: query
         uses: ./actions/observability/sources/query-github-actions
@@ -51,6 +59,7 @@ jobs:
           include-logs: "false"
           token: ${{ secrets.CROSS_REPO_PAT }}
 
+      # 按 workflow 分组统计: 总数/失败数/成功率
       - name: Compute per-workflow stats
         id: stats
         shell: bash
@@ -77,6 +86,7 @@ jobs:
           echo "$stats" >> "$GITHUB_OUTPUT"
           echo "EVOLVECI_EOF" >> "$GITHUB_OUTPUT"
 
+      # 从 _state 分支读取历史健康数据（7 天滑动窗口）
       - name: Read health history
         id: history
         uses: ./actions/observability/state/read-state
@@ -85,6 +95,7 @@ jobs:
           state-path: "workflow-health/all.json"
           default: '{"workflows":{}}'
 
+      # 检测退化: 对比今日失败率 vs 7 天均值，delta > 10% 则告警
       - name: Detect degradations
         id: degradations
         shell: bash
@@ -123,6 +134,7 @@ jobs:
           echo "$degradations" >> "$GITHUB_OUTPUT"
           echo "EVOLVECI_EOF" >> "$GITHUB_OUTPUT"
 
+      # 构建更新后的健康历史（合并今日数据到聚合文件）
       - name: Build updated health history
         id: updated-history
         shell: bash
@@ -149,6 +161,7 @@ jobs:
             echo "EVOLVECI_EOF"
           } >> "$GITHUB_OUTPUT"
 
+      # 写回健康历史到 _state 分支（双写 + 重试）
       - name: Write health history
         uses: ./actions/observability/state/write-state
         with:
@@ -157,6 +170,7 @@ jobs:
           value: ${{ steps.updated-history.outputs.history }}
           merge: "true"
 
+      # 计算趋势: 对比近 7 天 vs 前 7 天均值，输出 improving/stable/degrading
       - name: Compute trends
         id: trends
         uses: ./actions/observability/analyzers/compute-trends
@@ -165,6 +179,7 @@ jobs:
           current-health-data: ${{ steps.updated-history.outputs.history }}
           token: ${{ secrets.CROSS_REPO_PAT }}
 
+      # 聚合所有数据为 JSON，传递给 synthesize job
       - name: Aggregate output
         id: aggregate
         shell: bash
@@ -208,6 +223,9 @@ jobs:
             echo "EVOLVECI_EOF"
           } >> "$GITHUB_OUTPUT"
 
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  # synthesize job: 调用 AI 将原始数据合成为可读的日报
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   synthesize:
     needs: collect
     if: needs.collect.outputs.stats != '' && needs.collect.outputs.stats != '{}'
@@ -219,6 +237,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
+      # 将统计数据 + 趋势传给 GLM，生成结构化日报
       - name: AI synthesis
         id: ai
         uses: ./actions/observability/analyzers/call-glm
@@ -229,6 +248,9 @@ jobs:
           base-url: ${{ secrets.GLM_BASE_URL }}
           model: ${{ secrets.GLM_MODEL }}
 
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  # publish job: 将日报发布为 GitHub Issue + 发送到 Slack
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   publish:
     needs: synthesize
     if: needs.synthesize.outputs.result != ''
@@ -243,6 +265,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
+      # 将 AI 输出写入临时文件（通过 env 传递，防止 shell 注入）
       - name: Write report
         shell: bash
         env:
@@ -250,11 +273,13 @@ jobs:
         run: |
           printf '%s' "$REPORT" > /tmp/daily-report.md
 
+      # 获取今日日期，用于 Issue 标题
       - name: Set date
         id: date
         shell: bash
         run: echo "today=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
+      # 创建 GitHub Issue（CI Health Report - 日期）
       - name: Post issue report
         uses: ./actions/observability/publishers/post-issue-report
         with:
@@ -262,6 +287,7 @@ jobs:
           report-path: /tmp/daily-report.md
           labels: "daily-report,ci-health"
 
+      # 发送日报到 Slack
       - name: Post Slack report
         continue-on-error: true
         uses: ./actions/observability/publishers/post-slack-report

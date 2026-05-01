@@ -15,24 +15,33 @@ permissions:
   contents: read
 
 jobs:
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  # test job: 运行 bats 单元测试（42 项检查）
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   test:
     runs-on: blacksmith
     timeout-minutes: 10
     steps:
+      # 安全加固
       - name: Harden runner
         uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40
         with:
           egress-policy: audit
 
+      # 拉取代码
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
+      # 运行 tests/run-tests.sh 测试套件
       - name: Run tests
         shell: bash
         run: |
           chmod +x tests/run-tests.sh
           bash tests/run-tests.sh
 
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  # validate-actions: 验证所有 action.yml 结构合法
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   validate-actions:
     runs-on: blacksmith
     timeout-minutes: 5
@@ -45,6 +54,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
+      # 遍历 actions/ 下所有 action.yml，检查 name/description/runs 字段
       - name: Validate action structure
         shell: bash
         run: |
@@ -68,6 +78,9 @@ jobs:
           done
           echo "All actions valid."
 
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  # validate-workflows: 验证所有 workflow YAML 结构合法
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   validate-workflows:
     runs-on: blacksmith
     timeout-minutes: 5
@@ -80,6 +93,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
+      # 遍历 .github/workflows/ 下所有 yml，检查 name/on/jobs 字段
       - name: Validate workflow structure
         shell: bash
         run: |

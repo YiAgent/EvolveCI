@@ -16,15 +16,21 @@ jobs:
   heartbeat:
     runs-on: blacksmith
     timeout-minutes: 5
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # heartbeat job: 自监控 — 检查各子系统是否健康
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     steps:
+      # 安全加固
       - name: Harden runner
         uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40
         with:
           egress-policy: audit
 
+      # 拉取代码
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
+      # 探针 1: triage-failure 最近一次成功距今是否超过 24h
       - name: "Probe: triage-failure last success"
         id: probe-triage
         shell: bash
@@ -57,6 +63,7 @@ jobs:
             echo "triage-ok=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # 探针 2: _state 分支上的健康数据是否超过 48h 未更新
       - name: "Probe: health data freshness"
         id: probe-health
         shell: bash
@@ -84,6 +91,7 @@ jobs:
             echo "health-ok=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # 探针 3: 已知模式库是否至少有 3 条模式（太少说明学习不足）
       - name: "Probe: known-patterns health"
         id: probe-patterns
         shell: bash
@@ -100,6 +108,7 @@ jobs:
             echo "patterns-ok=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # 汇总探针结果: triage 不健康 → workflow 失败; 其他 → 仅警告
       - name: Evaluate probes
         shell: bash
         run: |
