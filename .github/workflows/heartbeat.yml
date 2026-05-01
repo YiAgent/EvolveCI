@@ -25,7 +25,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Probe: triage-failure last success
+      - name: "Probe: triage-failure last success"
         id: probe-triage
         shell: bash
         env:
@@ -57,7 +57,7 @@ jobs:
             echo "triage-ok=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Probe: health data freshness
+      - name: "Probe: health data freshness"
         id: probe-health
         shell: bash
         env:
@@ -84,7 +84,7 @@ jobs:
             echo "health-ok=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Probe: known-patterns health
+      - name: "Probe: known-patterns health"
         id: probe-patterns
         shell: bash
         run: |
