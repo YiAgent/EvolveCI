@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add *)",
+      "Bash(doppler configs *)",
+      "Bash(doppler --version)",
+      "Bash(doppler setup *)",
+      "Bash(doppler secrets *)",
+      "Bash(awk '{print $1}')",
+      "Bash(awk -F'│' '{print $2}')",
+      "Bash(doppler projects *)",
+      "Bash(git commit *)",
+      "Bash(chmod +x /home/wy/projects/YiAgent/EvolveCI/tests/run-tests.sh)",
+      "Bash(bash /home/wy/projects/YiAgent/EvolveCI/tests/run-tests.sh)",
+      "Bash(git push *)",
+      "Bash(gh run *)",
+      "Bash(python3 *)",
+      "Bash(read f *)",
+      "Bash(gh workflow *)"
+    ]
+  }
+}

@@ -28,6 +28,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install yq
+        shell: bash
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
       - name: Load onboarded repos
         id: repos
         shell: bash
@@ -121,22 +127,36 @@ jobs:
           STATS='${{ steps.stats.outputs.stats }}'
           TODAY=$(date -u +%Y-%m-%d)
 
+          # Checkout _state branch
+          git fetch origin _state --depth=1 2>/dev/null || true
+          git checkout -B _state origin/_state 2>/dev/null || {
+            git checkout --orphan _state
+            git rm -rf . 2>/dev/null || true
+            git commit --allow-empty -m "init: CI observability state branch"
+          }
+
+          mkdir -p workflow-health
+
           while IFS= read -r wf; do
             key=$(echo "$wf" | jq -r '.key')
             rate=$(echo "$wf" | jq -r '.failure_rate')
             state_path="workflow-health/$(echo "$key" | tr '/' '-').json"
 
             # Read existing
-            git fetch origin _state --depth=1 2>/dev/null || true
-            existing=$(git show "origin/_state:$state_path" 2>/dev/null || echo '{"daily":{}}')
+            existing=$(cat "$state_path" 2>/dev/null || echo '{"daily":{}}')
 
             # Merge today's rate
             updated=$(echo "$existing" | jq --arg d "$TODAY" --argjson r "$rate" '.daily[$d] = $r')
-
-            # Write via write-state
-            echo "$updated" > /tmp/health-update.json
-            # (write-state handles the _state branch commit)
+            echo "$updated" > "$state_path"
           done < <(echo "$STATS" | jq -c '.[]')
+
+          # Commit and push
+          git add workflow-health/
+          git -c user.name="evolveCI bot" -c user.email="bot@evolveci.dev" \
+            commit -m "state: update health history $TODAY" || true
+          git push origin _state 2>/dev/null || echo "::warning::Failed to push health history"
+
+          git checkout - 2>/dev/null || true
 
       - name: Aggregate output
         id: aggregate
@@ -215,12 +235,19 @@ jobs:
       - name: Write report
         shell: bash
         run: |
-          echo '${{ needs.synthesize.outputs.result }}' > /tmp/daily-report.md
+          cat > /tmp/daily-report.md << 'REPORT_EOF'
+          ${{ needs.synthesize.outputs.result }}
+          REPORT_EOF
+
+      - name: Set date
+        id: date
+        shell: bash
+        run: echo "today=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
       - name: Post issue report
         uses: ./actions/observability/publishers/post-issue-report
         with:
-          title: "CI Health Report - $(date -u +%Y-%m-%d)"
+          title: "CI Health Report - ${{ steps.date.outputs.today }}"
           report-path: /tmp/daily-report.md
           labels: "daily-report,ci-health"
 
@@ -229,6 +256,6 @@ jobs:
         uses: ./actions/observability/publishers/post-slack-report
         with:
           webhook-url: ${{ secrets.SLACK_CI_WEBHOOK }}
-          title: "CI Health Report - $(date -u +%Y-%m-%d)"
+          title: "CI Health Report - ${{ steps.date.outputs.today }}"
           message: ${{ needs.synthesize.outputs.result }}
           status: info

@@ -28,6 +28,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install yq
+        shell: bash
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
       - name: Load onboarded repos
         id: repos
         shell: bash
@@ -185,12 +191,19 @@ jobs:
       - name: Write report
         shell: bash
         run: |
-          echo '${{ needs.synthesize.outputs.result }}' > /tmp/weekly-report.md
+          cat > /tmp/weekly-report.md << 'REPORT_EOF'
+          ${{ needs.synthesize.outputs.result }}
+          REPORT_EOF
+
+      - name: Set date
+        id: date
+        shell: bash
+        run: echo "week=$(date -u +%Y-W%V)" >> "$GITHUB_OUTPUT"
 
       - name: Post issue report
         uses: ./actions/observability/publishers/post-issue-report
         with:
-          title: "CI Weekly Deep Dive - $(date -u +%Y-W%V)"
+          title: "CI Weekly Deep Dive - ${{ steps.date.outputs.week }}"
           report-path: /tmp/weekly-report.md
           labels: "weekly-report,ci-health"
 
@@ -199,6 +212,6 @@ jobs:
         uses: ./actions/observability/publishers/post-slack-report
         with:
           webhook-url: ${{ secrets.SLACK_CI_WEBHOOK }}
-          title: "CI Weekly Deep Dive - $(date -u +%Y-W%V)"
+          title: "CI Weekly Deep Dive - ${{ steps.date.outputs.week }}"
           message: ${{ needs.synthesize.outputs.result }}
           status: info
