@@ -17,6 +17,8 @@ jobs:
   collect:
     runs-on: blacksmith
     timeout-minutes: 20
+    permissions:
+      contents: write
     outputs:
       weekly-data: ${{ steps.aggregate.outputs.weekly-data }}
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

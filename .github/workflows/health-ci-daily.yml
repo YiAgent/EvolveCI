@@ -17,6 +17,8 @@ jobs:
   collect:
     runs-on: blacksmith
     timeout-minutes: 15
+    permissions:
+      contents: write
     outputs:
       stats: ${{ steps.aggregate.outputs.stats }}
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
