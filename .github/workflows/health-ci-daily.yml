@@ -59,9 +59,9 @@ jobs:
 
           # Write jq filter to file to avoid quoting issues
           cat > /tmp/stats.jq << 'JQEOF'
-          group_by(.repo + "/" + .workflowName) |
+          group_by([.repo, .workflowName]) |
           map({
-            key: .[0].repo + "/" + .[0].workflowName,
+            key: (.[0].repo + "/" + .[0].workflowName),
             repo: .[0].repo,
             workflow: .[0].workflowName,
             total: length,
