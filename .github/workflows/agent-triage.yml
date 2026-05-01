@@ -1,0 +1,41 @@
+name: "Agent — CI Triage"
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "覆盖默认命令（留空使用 /triage）"
+        required: false
+        default: ""
+
+concurrency:
+  group: agent-triage
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # Agent 将学习结果 commit 到 main 分支
+  issues: write
+  pull-requests: write
+
+jobs:
+  triage:
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 调用 OpenCI claude-harness 以 Agent 模式运行 /triage 命令
+    # Claude 会读取 CLAUDE.md、memory/、data/，通过 GitHub MCP 查询 CI 数据，
+    # 分析失败，执行动作，并将学习结果 commit 回 main 分支
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    uses: YiAgent/OpenCI/.github/workflows/claude-harness.yml@main
+    with:
+      task: "triage"
+      prompt: ${{ inputs.prompt || '/triage' }}
+      model: ${{ vars.CLAUDE_MODEL || 'claude-sonnet-4-6' }}
+      api-provider: "anthropic"
+      max-turns: 30
+      timeout-minutes: 20
+    secrets:
+      api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+      api-base-url: ${{ secrets.ANTHROPIC_BASE_URL }}
+      github-token: ${{ secrets.CROSS_REPO_PAT }}
+      slack-webhook: ${{ secrets.SLACK_CI_WEBHOOK }}

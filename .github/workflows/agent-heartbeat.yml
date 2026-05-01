@@ -1,0 +1,36 @@
+name: "Agent — CI Heartbeat"
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"  # 每 6 小时
+  workflow_dispatch:
+
+concurrency:
+  group: agent-heartbeat
+  cancel-in-progress: true
+
+permissions:
+  contents: write   # 熔断器自动恢复时需要写 memory/circuit/state.json
+  issues: write
+
+jobs:
+  heartbeat:
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 调用 OpenCI claude-harness 以 Agent 模式运行 /heartbeat 命令
+    # Claude 会检查 5 个健康探针：triage 活跃度、模式库健康、
+    # 统计数据新鲜度、熔断器状态、目录完整性
+    # 任一关键探针失败 → 创建 GitHub Issue + Slack 通知
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    uses: YiAgent/OpenCI/.github/workflows/claude-harness.yml@main
+    with:
+      task: "heartbeat"
+      prompt: "/heartbeat"
+      model: ${{ vars.CLAUDE_MODEL || 'claude-sonnet-4-6' }}
+      api-provider: "anthropic"
+      max-turns: 15
+      timeout-minutes: 10
+    secrets:
+      api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+      api-base-url: ${{ secrets.ANTHROPIC_BASE_URL }}
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+      slack-webhook: ${{ secrets.SLACK_CI_WEBHOOK }}

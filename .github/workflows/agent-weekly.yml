@@ -1,0 +1,35 @@
+name: "Agent — CI Weekly Deep Dive"
+
+on:
+  schedule:
+    - cron: "0 2 * * 1"  # 每周一 UTC 02:00
+  workflow_dispatch:
+
+concurrency:
+  group: agent-weekly
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # Agent 将周报快照写入 memory/stats/weekly/，更新 CLAUDE.md
+  issues: write
+
+jobs:
+  weekly-report:
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 调用 OpenCI claude-harness 以 Agent 模式运行 /weekly-report 命令
+    # Claude 会聚合 7 天数据，对比上周，计算 DORA 指标，生成深度周报，
+    # 更新 CLAUDE.md 的"近期学习"章节，并归档过期 incidents
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    uses: YiAgent/OpenCI/.github/workflows/claude-harness.yml@main
+    with:
+      task: "weekly-report"
+      prompt: "/weekly-report"
+      model: ${{ vars.CLAUDE_MODEL || 'claude-sonnet-4-6' }}
+      api-provider: "anthropic"
+      max-turns: 25
+      timeout-minutes: 25
+    secrets:
+      api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+      api-base-url: ${{ secrets.ANTHROPIC_BASE_URL }}
+      github-token: ${{ secrets.CROSS_REPO_PAT }}
+      slack-webhook: ${{ secrets.SLACK_CI_WEBHOOK }}

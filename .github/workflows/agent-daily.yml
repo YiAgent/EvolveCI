@@ -1,0 +1,35 @@
+name: "Agent — CI Daily Report"
+
+on:
+  schedule:
+    - cron: "0 1 * * 1-5"  # 工作日 UTC 01:00
+  workflow_dispatch:
+
+concurrency:
+  group: agent-daily
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # Agent 将统计快照 commit 到 memory/stats/daily/
+  issues: write
+
+jobs:
+  daily-report:
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 调用 OpenCI claude-harness 以 Agent 模式运行 /daily-report 命令
+    # Claude 会采集 24h CI 数据，检测退化，生成中文日报，
+    # 创建 GitHub Issue，并将统计快照写入 memory/stats/daily/
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    uses: YiAgent/OpenCI/.github/workflows/claude-harness.yml@main
+    with:
+      task: "daily-report"
+      prompt: "/daily-report"
+      model: ${{ vars.CLAUDE_MODEL || 'claude-sonnet-4-6' }}
+      api-provider: "anthropic"
+      max-turns: 20
+      timeout-minutes: 15
+    secrets:
+      api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+      api-base-url: ${{ secrets.ANTHROPIC_BASE_URL }}
+      github-token: ${{ secrets.CROSS_REPO_PAT }}
+      slack-webhook: ${{ secrets.SLACK_CI_WEBHOOK }}

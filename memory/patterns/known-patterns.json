@@ -1,0 +1,112 @@
+[
+  {
+    "id": "npm-eai-again",
+    "match": "EAI_AGAIN.*registry\\.npmjs\\.org|ENOTFOUND.*registry\\.npmjs\\.org",
+    "category": "flaky",
+    "auto_rerun": true,
+    "notify": false,
+    "severity": "low",
+    "seen_count": 47,
+    "last_seen": "2026-04-28",
+    "source": "seed"
+  },
+  {
+    "id": "pypi-timeout",
+    "match": "ReadTimeoutError.*pypi\\.org|HTTPSConnectionPool.*pypi\\.org",
+    "category": "flaky",
+    "auto_rerun": true,
+    "notify": false,
+    "severity": "low",
+    "seen_count": 32,
+    "last_seen": "2026-04-27",
+    "source": "seed"
+  },
+  {
+    "id": "ghcr-rate-limit",
+    "match": "rate limit exceeded.*ghcr\\.io|toomanyrequests.*ghcr",
+    "category": "flaky",
+    "auto_rerun": true,
+    "notify": false,
+    "severity": "low",
+    "seen_count": 18,
+    "last_seen": "2026-04-26",
+    "source": "seed"
+  },
+  {
+    "id": "runner-disk-full",
+    "match": "No space left on device|runner.*disk.*full",
+    "category": "infra",
+    "auto_rerun": false,
+    "notify": true,
+    "severity": "high",
+    "seen_count": 5,
+    "last_seen": "2026-04-25",
+    "source": "seed"
+  },
+  {
+    "id": "runner-startup-fail",
+    "match": "The runner.*did not connect|runner.*failed to start",
+    "category": "flaky",
+    "auto_rerun": true,
+    "notify": false,
+    "severity": "low",
+    "seen_count": 12,
+    "last_seen": "2026-04-24",
+    "source": "seed"
+  },
+  {
+    "id": "trivy-db-update",
+    "match": "FATAL.*failed to download vulnerability DB|trivy.*db.*download.*fail",
+    "category": "flaky",
+    "auto_rerun": true,
+    "notify": false,
+    "severity": "low",
+    "seen_count": 8,
+    "last_seen": "2026-04-23",
+    "source": "seed"
+  },
+  {
+    "id": "trufflehog-timeout",
+    "match": "trufflehog.*timeout|trufflehog.*context deadline exceeded",
+    "category": "flaky",
+    "auto_rerun": true,
+    "notify": false,
+    "severity": "low",
+    "seen_count": 6,
+    "last_seen": "2026-04-22",
+    "source": "seed"
+  },
+  {
+    "id": "anthropic-rate-limit",
+    "match": "rate_limit_error.*anthropic|429.*too many requests.*claude",
+    "category": "flaky",
+    "auto_rerun": true,
+    "notify": false,
+    "severity": "low",
+    "seen_count": 15,
+    "last_seen": "2026-04-28",
+    "source": "seed"
+  },
+  {
+    "id": "langsmith-timeout",
+    "match": "langsmith.*504.*timeout|langsmith.*gateway timeout",
+    "category": "flaky",
+    "auto_rerun": true,
+    "notify": false,
+    "severity": "low",
+    "seen_count": 4,
+    "last_seen": "2026-04-21",
+    "source": "seed"
+  },
+  {
+    "id": "docker-daemon-fail",
+    "match": "Cannot connect to the Docker daemon|docker.*daemon.*not running",
+    "category": "infra",
+    "auto_rerun": true,
+    "notify": true,
+    "severity": "medium",
+    "seen_count": 9,
+    "last_seen": "2026-04-20",
+    "source": "seed"
+  }
+]

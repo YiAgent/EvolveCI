@@ -1,0 +1,8 @@
+{
+  "active": false,
+  "reason": "",
+  "tripped_at": null,
+  "tripped_dimension": null,
+  "auto_recover_at": null,
+  "history": []
+}
