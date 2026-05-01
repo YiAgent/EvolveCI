@@ -31,7 +31,7 @@ jobs:
           egress-policy: audit
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Install yq
         shell: bash
@@ -86,11 +86,12 @@ jobs:
     permissions:
       contents: write
       issues: write
+      pull-requests: write
     strategy:
       max-parallel: 3
       fail-fast: false
       matrix:
-        run: ${{ fromJson(needs.scan.outputs.runs) }}
+        run: ${{ fromJson(needs.scan.outputs.runs)[0:10] }}
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40
@@ -98,7 +99,7 @@ jobs:
           egress-policy: audit
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Fetch _state branch
         shell: bash
@@ -371,10 +372,12 @@ jobs:
           PATTERN_ID="ai-$(echo -n "$PATTERN" | md5sum | cut -c1-8)"
 
           # Create pattern JSON
+          TODAY=$(date -u +%Y-%m-%d)
           jq -n \
             --arg id "$PATTERN_ID" \
             --arg match "$PATTERN" \
             --arg category "$CATEGORY" \
+            --arg today "$TODAY" \
             '{
               id: $id,
               match: $match,
@@ -383,7 +386,7 @@ jobs:
               notify: (if $category == "flaky" then false else true end),
               severity: (if $category == "flaky" then "low" elif $category == "security" then "high" else "medium" end),
               seen_count: 1,
-              last_seen: (now | strftime("%Y-%m-%d")),
+              last_seen: $today,
               source: "ai-learned"
             }' > /tmp/new-pattern.json
 
