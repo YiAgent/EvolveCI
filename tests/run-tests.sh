@@ -108,7 +108,6 @@ test_action_structure() {
     "observability/analyzers/match-known-patterns/action.yml"
     "observability/analyzers/classify-heuristic/action.yml"
     "observability/analyzers/classify-ai/action.yml"
-    "observability/analyzers/call-glm/action.yml"
     "observability/analyzers/compute-flakiness/action.yml"
     "observability/analyzers/compute-mttr/action.yml"
     "observability/analyzers/compute-trends/action.yml"
