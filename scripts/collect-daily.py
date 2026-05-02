@@ -162,7 +162,7 @@ def fetch_top3_with_logs(
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n", 1)[0])
-    ap.add_argument("--repos-file", default="data/onboarded-repos.yml")
+    ap.add_argument("--config", default="config.yml")
     ap.add_argument("--since", default="24h")
     ap.add_argument("--out", default="daily-stats.json")
     ap.add_argument("--dedup-repo", default=os.environ.get("GITHUB_REPOSITORY", ""))
@@ -172,7 +172,7 @@ def main() -> int:
     since = dt.datetime.now(dt.timezone.utc) - delta
     since_iso = since.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    repos = load_repos(Path(args.repos_file))
+    repos = load_repos(Path(args.config))
     repo_names: list[str] = [r["name"] for r in repos]
 
     # ── Aggregate run totals across repos ──────────────────────────────────

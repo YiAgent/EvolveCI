@@ -25,13 +25,13 @@ print(f'OK: {len(patterns)} patterns validated')
 "
 }
 
-@test "onboarded-repos.yml is valid YAML" {
-  python3 -c "import yaml; yaml.safe_load(open('$DATA_DIR/onboarded-repos.yml'))"
+@test "config.yml is valid YAML" {
+  python3 -c "import yaml; yaml.safe_load(open('$PROJECT_ROOT/config.yml'))"
 }
 
-@test "onboarded-repos have required fields" {
-  python3 -c "
-import yaml, sys
+@test "config.yml repos have required fields" {
+  run python3 -c "
+data = yaml.safe_load(open('$PROJECT_ROOT/config.yml'))"
 data = yaml.safe_load(open('$DATA_DIR/onboarded-repos.yml'))
 repos = data.get('repos', [])
 if not repos:
