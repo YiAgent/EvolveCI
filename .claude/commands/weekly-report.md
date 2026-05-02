@@ -100,24 +100,24 @@
 
 ### 步骤 5：开 PR（不要直接 push 到 main，必做）
 
+把渲染好的 markdown 报告写入文件，把"近期学习"那一行准备好，调用辅助脚本：
+
 ```bash
-WEEK=$(date -u +%G-W%V)
-BR="weekly/${WEEK}"
+# 1. 写入报告 markdown
+echo "$REPORT_MARKDOWN" > /tmp/weekly-report.md
 
-git switch -c "$BR"
-# 在 CLAUDE.md "近期学习"章节追加一行：YYYY-MM-DD: <模式 id> — <一句话>
-# 无新模式 → 追加：YYYY-MM-DD: _本周无新模式_
+# 2. 准备 CLAUDE.md 的学习行（无新模式时用占位）
+LEARNING="$(date -u +%Y-%m-%d): <pattern-id> — <一句话>"
+# 或：
+# LEARNING="$(date -u +%Y-%m-%d): _本周无新模式_"
 
-git add CLAUDE.md
-git -c "user.name=evolveci-agent" -c "user.email=evolveci-agent@users.noreply.github.com" \
-    commit -m "weekly(${WEEK}): deep dive"
-git push -u origin "$BR"
-
-gh pr create \
-  --base main --head "$BR" \
-  --title "weekly: ${WEEK} deep dive" \
-  --body-file <(echo "$REPORT_MARKDOWN")
+# 3. 一行执行：分支创建 + CLAUDE.md 编辑 + commit + push + 开 PR
+bash scripts/weekly-pr.sh \
+  --report-file /tmp/weekly-report.md \
+  --learning-line "$LEARNING"
 ```
+
+脚本输出一行 JSON `{"status":"ok","branch":"...","pr":"...","week":"..."}`。
 
 PR 由人评审后 squash-merge。`/weekly-report` **不**自动 admin merge —
 留给 owner 决定是否信任后续轮次再切换为 `--auto`。

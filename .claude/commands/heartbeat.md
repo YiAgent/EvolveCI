@@ -5,10 +5,22 @@
 > 内存模型：所有持久化状态都存放在带 `evolveci/*` 前缀标签的 Issue 中。
 > 详见 `docs/MEMORY-MODEL.md`。
 
+## ⚠️ 强制契约（不可违反）
+
+每次运行**必须**以下面两种动作之一结束：
+
+1. **任一关键探针失败时** — 必须执行 `gh issue comment` 或 `gh issue create`
+   往 `evolveci/heartbeat` 标签的 Issue 上写入本轮 5 个探针的结果。
+2. **全部通过时** — 必须执行 `gh issue close` 关闭任何尚处 open 的
+   `evolveci/heartbeat` Issue（带恢复 comment + `status/recovered` 标签）。
+
+不允许"探针都跑完了但什么都没写"。这是任务的成功条件——没有 issue 写入或
+close = 任务失败，即使所有命令都执行了。**下方的 bash 代码是你必须执行的
+命令，不是示例。**
+
 ## 执行步骤
 
-依次执行以下 5 个探针，任一关键探针失败 → 在 `evolveci/heartbeat` Issue 上累加；
-全部通过 → 关闭任何尚处 open 的 `evolveci/heartbeat` Issue。
+依次执行以下 5 个探针，最后**根据强制契约写 issue**。
 
 ### 探针 1：Triage 活跃度（关键）
 

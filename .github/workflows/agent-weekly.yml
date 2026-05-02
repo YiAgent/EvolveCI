@@ -27,6 +27,6 @@ jobs:
     with:
       task: weekly-report
       prompt: /weekly-report
-      max-turns: 80
-      timeout-minutes: 50
+      max-turns: 120
+      timeout-minutes: 70
     secrets: inherit
