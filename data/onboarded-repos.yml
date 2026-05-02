@@ -1,15 +1,20 @@
+# EvolveCI 监控的仓库列表（agent /triage / /daily / /weekly 都会读它）.
+#
+# 字段:
+#   name:      org/repo
+#   workflows: "*" 表示所有 workflow；或逗号分隔的 yml 文件名
+#   priority:  high | low (high 优先级仓库会先处理)
+#   exclude:   排除特定 workflow 文件名（数组）
 repos:
-  - name: org/repo-a
-    workflows: "*"
-    priority: high
-
-  - name: org/repo-b
-    workflows: "pr.yml,ci.yml"
-    priority: low
-
-  - name: org/repo-c
+  - name: YiAgent/EvolveCI
     workflows: "*"
     priority: high
     exclude:
-      - "stale.yml"
-      - "community.yml"
+      - "agent-heartbeat.yml"
+      - "agent-triage.yml"
+      - "agent-daily.yml"
+      - "agent-weekly.yml"
+
+  - name: YiAgent/OpenCI
+    workflows: "*"
+    priority: high
