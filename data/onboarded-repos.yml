@@ -18,3 +18,10 @@ repos:
   - name: YiAgent/OpenCI
     workflows: "*"
     priority: high
+
+  - name: YiAgent/aicert
+    workflows: "*"
+    priority: high
+    # private repo — requires CROSS_REPO_PAT secret with `repo` scope
+    # (the default GITHUB_TOKEN cannot read actions for private cross-repo).
+    private: true

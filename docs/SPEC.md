@@ -1209,6 +1209,198 @@ repos:
 
 ---
 
+## 二十、确定性预处理 vs Agent 决策（v5.1 契约）
+
+> **添加于 v5.1 (2026-05)**。这一节是当前架构的核心约束。
+>
+> **本节优先于本 SPEC 其它章节。** 凡涉及 `_state` 孤儿分支、`memory/` 文件、
+> 或要求 agent 直接查询 GitHub Actions API 的旧契约（v3 / v4，散落在 §4–§12 与
+> §14 等处），自 v5.1 起一律**作废**。所有跨运行状态走 GitHub Issues
+> （`evolveci/*` 标签），实现见 `docs/MEMORY-MODEL.md`、
+> `actions/observability/`、`scripts/collect-*.py`、`.claude/commands/*.md`。
+> 如本节与早期章节冲突，以本节为准。
+
+### 20.1 原则
+
+确定性的工作（查 gh、算 fingerprint、跑正则、计指标）由脚本/composite action
+完成；agent 只在脚本无法决断时介入。新分析逻辑**默认**进 `actions/observability/`
+或 `scripts/collect-*.py`，**不**进 `.claude/commands/*.md`。
+
+### 20.2 契约
+
+| 契约 | 强制 |
+|------|------|
+| 任何 `gh run list` 调用必须从 preprocessor 脚本发出 | ✅ |
+| `.claude/commands/*.md` 中的 `gh` 调用仅限 issue/label/PR 操作（不查 actions） | ✅ |
+| 新增 analyzer 必须先有 composite action 或 collector 脚本，再考虑 agent prompt 改动 | ✅ |
+| Tier 1 / Tier 2 不调用 LLM（零成本） | ✅ |
+| Tier 3 LLM 调用必须配 max-turns 上限（见 docs/CONFIG.md） | ✅ |
+
+### 20.3 数据流：`DATA_CONTEXT` prompt injection
+
+每个 agent workflow 拆成两个 job：
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ collect (runs-on: ubuntu-latest)                         │
+│   - python3 -m pip install --user pyyaml                 │
+│   - python3 scripts/<collector>.py --out /tmp/x.json     │
+│   - echo "context<<EOF\n$(cat /tmp/x.json)\nEOF"         │
+│       >> $GITHUB_OUTPUT                                  │
+│   outputs: context                                       │
+└──────────────────┬───────────────────────────────────────┘
+                   │ needs.collect.outputs.context
+                   ▼
+┌──────────────────────────────────────────────────────────┐
+│ <task> (uses _call-harness.yml)                          │
+│   prompt: |-                                             │
+│     /<task>                                              │
+│     ---                                                  │
+│     DATA_CONTEXT:                                        │
+│     ${{ needs.collect.outputs.context }}                 │
+│   max-turns: <small>                                     │
+└──────────────────────────────────────────────────────────┘
+```
+
+agent 在 `prompt body` 里看到 `DATA_CONTEXT:` 段后面的 JSON，用以下方式取出：
+
+```bash
+sed -n '/^DATA_CONTEXT:/,$p' <<< "$PROMPT_BODY" | sed '1d' > /tmp/x.json
+```
+
+agent 的 `extra-allowed-tools` **不**包含任何 python / pip — 数据已经在 prompt 里。
+
+### 20.4 JSON Schema：`triage-input.json`
+
+`scripts/build-triage-input.py` 输出，agent 在 `/triage` 中通过
+`DATA_CONTEXT` 读取。
+
+```json
+{
+  "schema_version": 1,
+  "generated_at":   "<ISO8601>",
+  "since":          "<ISO8601>",
+  "repos_processed": {"<org/repo>": <int>},
+  "patterns_count":  <int>,
+  "entries": [
+    {
+      "run_id":         <int>,
+      "repo":           "<org/repo>",
+      "workflow_name":  "<string>",
+      "workflow_file":  "<basename or empty>",
+      "branch":         "<string>",
+      "event":          "<string>",
+      "url":            "<string>",
+      "created_at":     "<ISO8601>",
+      "failed_step":    "<job / step name>",
+      "redacted_tail":  "<last N lines, redacted>",
+      "fingerprint":    "<12hex>",
+      "existing_issue": <int|null>,
+      "tier1": {"matched": <bool>, "pattern_id"?, "category"?, "severity"?, "auto_rerun"?, "notify"?, "description"?, "action_suggestion"?},
+      "tier2": {"classified": <bool>, "category", "severity", "confidence", "auto_rerun", "notify"},
+      "needs_tier3":    <bool>
+    }
+  ]
+}
+```
+
+### 20.5 JSON Schema：`daily-stats.json`
+
+`scripts/collect-daily.py` 输出，agent 在 `/daily-report` 中通过
+`DATA_CONTEXT` 读取。
+
+```json
+{
+  "schema_version": 1,
+  "generated_at":   "<ISO8601>",
+  "window":         "<window-spec>",
+  "since":          "<ISO8601>",
+  "repos":          ["<org/repo>"],
+  "totals": {
+    "runs": <int>, "success": <int>, "failure": <int>, "cancelled": <int>,
+    "success_rate": <float>, "flaky_rate": <float>
+  },
+  "top_failing_workflows": [{"repo", "workflow", "fails": <int>}],
+  "top3_failures_with_logs": [
+    {"run_id","repo","workflow","branch","url","created_at","failed_step","redacted_tail"}
+  ],
+  "triage": {
+    "new":            {"count": <int>, "samples": [{"number","title","category"}]},
+    "open_24h":       {"count": <int>, "samples": [...]},
+    "patterns_added": {"count": <int>, "samples": [...]}
+  },
+  "circuit":    {"active": <bool>, "tripped_at": "<ISO8601|null>"},
+  "prev_daily": <{"number","title","body","createdAt"} | null>,
+  "no_data":    <bool>
+}
+```
+
+### 20.6 JSON Schema：`weekly-stats.json`
+
+`scripts/collect-weekly.py` 输出，agent 在 `/weekly-report` 中读取。
+`daily-stats.json` 字段全部存在；以下为额外字段：
+
+```json
+{
+  "iso_week": "YYYY-Www",
+  "until":    "<ISO8601>",
+  "by_day":   [{"date": "YYYY-MM-DD", "runs": <int>, "failures": <int>, "success": <int>}],
+  "triage": {
+    "new":              {...},
+    "closed":           {...},
+    "open_at_week_end": {...},
+    "patterns_added":   {...},
+    "mttr_hours_p50":   <float|null>,
+    "mttr_hours_p95":   <float|null>
+  },
+  "dora": {
+    "deployment_frequency_per_day": <float>,
+    "change_failure_rate":          <float|null>,
+    "mttr_hours":                   <float|null>
+  }
+}
+```
+
+### 20.7 Agent decision matrix（执行 `/triage` 时）
+
+| `existing_issue` | `tier1.matched` | `tier2.confidence` | 动作 |
+|---|---|---|---|
+| 非空 | — | — | 评论已有 issue，递增 occurrences |
+| null | true | — | 按 tier1 字段执行（无 LLM 调用）|
+| null | false | high | 按 tier2 字段执行（无 LLM 调用）|
+| null | false | medium / low | Tier 3 推理（这是唯一 LLM 触发点）|
+
+### 20.8 Pattern body schema (3 fields)
+
+每个 `evolveci/pattern` issue 的 body JSON 必须含：
+
+| 字段 | 类型 | 用途 |
+|------|------|------|
+| `id` | string (kebab-case) | 稳定标识 |
+| `match` | regex (length ≤200, no nested quantifiers) | Tier 1 匹配 |
+| `category` | enum {flaky, infra, code, dependency, security, unknown} | 失败分类 |
+| `severity` | enum {low, medium, high, critical} | 严重度 |
+| `auto_rerun` / `notify` | bool | 默认动作 |
+| `description` | 一句话标签（中文） | issue 顶部摘要 |
+| `human_explanation` | 多句通俗解释（中文） | 给人看的"是什么 / 为什么" |
+| `action_suggestion` | 可执行步骤（中文） | "怎么修" |
+
+`scripts/render-pattern.sh` 会按上面顺序渲染 markdown；triage 通过
+` ```json ` 块解析回机器字段。
+
+### 20.9 Lint
+
+`tests/agent-prompts.bats`（以及 `tests/run-tests.sh::test_agent_prompts`，
+两份保持一致）在 CI 中守护契约：扫描 `.claude/commands/*.md` 中**任意**
+` ```bash ` 围起来的代码块，命中 `gh run list` / `gh api repos/.*/actions` /
+`mcp__github_ci__*` 任一模式即让 PR 失败。该规则**没有**例外 — Tier 3
+推理也不允许在 prompt 内联 actions API；这些查询必须由 preprocessor 脚本
+完成。每个非 exempt 命令同时必须明示读取 `DATA_CONTEXT`（即在 ` ```bash `
+块中真正调用 `scripts/build-triage-input.py` / `scripts/collect-daily.py` /
+`scripts/collect-weekly.py` 之一，散文里的引用不算数）。
+
+---
+
 ## 附录 A：术语表
 
 | 术语 | 含义 |

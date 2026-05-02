@@ -264,7 +264,7 @@ test_agent_memory() {
   # CLAUDE.md
   if [ -f "$PROJECT_ROOT/CLAUDE.md" ]; then
     pass "CLAUDE.md exists"
-    if grep -q "被触发时的默认行为" "$PROJECT_ROOT/CLAUDE.md"; then
+    if grep -qE "触发即任务|被触发时的默认行为" "$PROJECT_ROOT/CLAUDE.md"; then
       pass "CLAUDE.md has default behavior section"
     else
       fail "CLAUDE.md missing default behavior section"
@@ -290,46 +290,21 @@ test_agent_memory() {
     fi
   done
 
-  # Memory directories
-  local required_dirs=(
-    "memory/patterns"
-    "memory/incidents"
-    "memory/stats/daily"
-    "memory/stats/weekly"
-    "memory/fingerprints"
-    "memory/flaky-tests"
-    "memory/circuit"
-    "memory/counters"
-  )
-  for dir in "${required_dirs[@]}"; do
-    if [ -d "$PROJECT_ROOT/$dir" ]; then
-      pass "Exists: $dir/"
+  # Pattern seed catalogue (replaces the legacy memory/patterns/ checks).
+  if [ -f "$PROJECT_ROOT/data/known-patterns.seed.json" ]; then
+    pass "data/known-patterns.seed.json exists"
+    if python3 -c "import json; d=json.load(open('$PROJECT_ROOT/data/known-patterns.seed.json')); assert len(d) >= 10" 2>/dev/null; then
+      pass "known-patterns.seed.json has ≥10 patterns"
     else
-      fail "Missing: $dir/"
+      fail "known-patterns.seed.json has fewer than 10 patterns"
     fi
-  done
-
-  # Memory key files
-  if [ -f "$PROJECT_ROOT/memory/patterns/known-patterns.json" ]; then
-    pass "memory/patterns/known-patterns.json exists"
-    if python3 -c "import json; d=json.load(open('$PROJECT_ROOT/memory/patterns/known-patterns.json')); assert len(d) >= 10" 2>/dev/null; then
-      pass "known-patterns.json has ≥10 patterns"
+    if python3 -c "import json; d=json.load(open('$PROJECT_ROOT/data/known-patterns.seed.json')); assert all('description' in p and 'human_explanation' in p and 'action_suggestion' in p for p in d)" 2>/dev/null; then
+      pass "every seed pattern carries description + human_explanation + action_suggestion"
     else
-      fail "known-patterns.json has fewer than 10 patterns"
+      fail "some seed patterns missing description / human_explanation / action_suggestion"
     fi
   else
-    fail "memory/patterns/known-patterns.json not found"
-  fi
-
-  if [ -f "$PROJECT_ROOT/memory/circuit/state.json" ]; then
-    pass "memory/circuit/state.json exists"
-    if python3 -c "import json; d=json.load(open('$PROJECT_ROOT/memory/circuit/state.json')); assert 'active' in d" 2>/dev/null; then
-      pass "memory/circuit/state.json has valid schema"
-    else
-      fail "memory/circuit/state.json missing 'active' field"
-    fi
-  else
-    fail "memory/circuit/state.json not found"
+    fail "data/known-patterns.seed.json not found"
   fi
 }
 
@@ -338,6 +313,62 @@ echo "=========================================="
 echo "  EvolveCI Test Suite"
 echo "=========================================="
 
+test_agent_prompts() {
+  echo ""
+  echo "=== Testing v5.1 Agent-When-Needed Contract ==="
+
+  local commands_dir="$PROJECT_ROOT/.claude/commands"
+  local violations=0
+
+  # Forbidden bash patterns inside ```bash fenced blocks of slash commands.
+  for cmd in "$commands_dir"/*.md; do
+    local bash_only
+    bash_only=$(awk '
+      /^```bash$/ { in_block=1; next }
+      /^```$/    { in_block=0; next }
+      in_block   { print }
+    ' "$cmd")
+    [ -z "$bash_only" ] && continue
+    for pat in "gh run list" "gh api repos/[^[:space:]]+/actions" "mcp__github_ci__"; do
+      if echo "$bash_only" | grep -qE "$pat"; then
+        fail "$(basename "$cmd"): forbidden bash pattern '$pat'"
+        violations=$((violations + 1))
+      fi
+    done
+  done
+
+  # Every non-exempt command must consume DATA_CONTEXT (the prompt-injected
+  # JSON written by the workflow's collect: job). Match only inside
+  # ```bash fenced blocks so a non-executable mention in prose doesn't
+  # satisfy the contract check.
+  local exempt=("check-circuit.md" "learn-pattern.md" "heartbeat.md")
+  for cmd in "$commands_dir"/*.md; do
+    local base
+    base=$(basename "$cmd")
+    local skip=false
+    for ex in "${exempt[@]}"; do
+      [ "$base" = "$ex" ] && skip=true && break
+    done
+    $skip && continue
+    local bash_only
+    bash_only=$(awk '
+      /^```bash$/ { in_block=1; next }
+      /^```$/    { in_block=0; next }
+      in_block   { print }
+    ' "$cmd")
+    if echo "$bash_only" | grep -q 'DATA_CONTEXT'; then
+      pass "$base consumes DATA_CONTEXT"
+    else
+      fail "$base does not parse DATA_CONTEXT (the workflow-injected JSON)"
+      violations=$((violations + 1))
+    fi
+  done
+
+  if [ "$violations" -eq 0 ]; then
+    pass "v5.1 agent-when-needed contract holds"
+  fi
+}
+
 test_redact_log
 test_action_structure
 test_workflow_structure
@@ -345,6 +376,7 @@ test_data_files
 test_manifest
 test_prompts
 test_agent_memory
+test_agent_prompts
 
 # Summary
 echo ""

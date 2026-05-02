@@ -19,12 +19,13 @@ through normal review.
 
 | File | Purpose | Schema |
 |------|---------|--------|
-| `data/onboarded-repos.yml` | Which repos `/triage` monitors. Per-repo workflow allow / exclude lists, priority. | `repos: [{ name, workflows, priority, exclude? }]` |
+| `data/onboarded-repos.yml` | Which repos `/triage` monitors. Per-repo workflow allow / exclude lists, priority, private flag. | `repos: [{ name, workflows, priority, exclude?, private? }]` |
 | `data/circuit-config.yml` | Circuit-breaker rerun budgets and `no_rerun` keyword guard. | `dimensions: { workflow, pattern, repo }`, `no_rerun: [...]` |
-| `data/known-patterns.seed.json` | Seed regex catalogue Tier 1 matches against. Promoted into `memory/patterns/known-patterns.json` on first run. | `[{ id, match, category, severity, action, ... }]` |
+| `data/known-patterns.seed.json` | Seed regex catalogue Tier 1 matches against. Seeded into `evolveci/pattern` issues on first run via `scripts/seed-patterns.sh`. | `[{ id, match, category, severity, description, fix_hint, ... }]` |
 
-Live (mutable) state lives in `memory/` and is owned by the agent —
-**don't hand-edit unless recovering from corruption**.
+Live (mutable) state lives entirely in `evolveci/*`-labelled GitHub Issues —
+see [`docs/MEMORY-MODEL.md`](./MEMORY-MODEL.md) for the schema. There is no
+on-disk state to hand-edit.
 
 ---
 
@@ -58,9 +59,9 @@ elsewhere.
 | Workflow | Cron | Prompt | max-turns | timeout-min | Notes |
 |----------|------|--------|-----------|-------------|-------|
 | `agent-heartbeat.yml` | `0 */6 * * *` | `/heartbeat` | 15 | 10 | 5 health probes |
-| `agent-triage.yml` | `*/15 * * * *` | `/triage` | 30 | 20 | manual override via `workflow_dispatch.inputs.prompt`; extra allow-list for `bash lib/redact-log.sh` |
-| `agent-daily.yml` | `0 1 * * 1-5` | `/daily-report` | 40 | 25 | aggregate 24h CI data |
-| `agent-weekly.yml` | `0 2 * * 1` | `/weekly-report` | 50 | 35 | DORA + CLAUDE.md update |
+| `agent-triage.yml` | `*/15 * * * *` | `/triage` | 15 | 15 | preprocessor (`scripts/build-triage-input.py`) does collection + Tier 1/2; agent only handles Tier 3 unknowns |
+| `agent-daily.yml` | `0 1 * * 1-5` | `/daily-report` | 20 | 20 | preprocessor (`scripts/collect-daily.py`) does aggregation; agent renders prose |
+| `agent-weekly.yml` | `0 2 * * 1` | `/weekly-report` | 30 | 30 | preprocessor (`scripts/collect-weekly.py`) does DORA + MTTR; agent renders + opens PR |
 
 If a task starts hitting `Reached maximum number of turns`, raise its
 `max-turns` (and bump `timeout-minutes` proportionally) — they're the only
@@ -121,6 +122,6 @@ Minimum to run:
 Optional but recommended:
 
 - **secret** `GLM_BASE_URL` — overrides the hard-coded default endpoint.
-- **secret** `CROSS_REPO_PAT` — needed if `data/onboarded-repos.yml` references repos outside this repo's `GITHUB_TOKEN` scope.
+- **secret** `CROSS_REPO_PAT` — required if any onboarded repo is private (e.g. `YiAgent/aicert`) or lives outside this repo's `GITHUB_TOKEN` scope. Needs `repo` scope (read+write on issues, read on actions) for every onboarded private repo.
 - **secret** `SLACK_CI_WEBHOOK` — without it, Slack alerts fall through silently (workflows still succeed).
 - **var** `CLAUDE_MODEL` — pin to a specific model id without editing workflow files.

@@ -26,6 +26,10 @@ SEV=$(printf "%s" "$PATTERN" | jq -r '.severity // "info"')
 AUTO=$(printf "%s" "$PATTERN" | jq -r '.auto_rerun // false')
 NOTIFY=$(printf "%s" "$PATTERN" | jq -r '.notify // false')
 DESCR=$(printf "%s" "$PATTERN" | jq -r '.description // ""')
+HUMAN_EXPL=$(printf "%s" "$PATTERN" | jq -r '.human_explanation // ""')
+# action_suggestion is the v5.1 field name; fall back to fix_hint for any
+# leftover data on disk that hasn't been rerendered yet.
+ACTION_SUG=$(printf "%s" "$PATTERN" | jq -r '.action_suggestion // .fix_hint // ""')
 SEEN_COUNT=$(printf "%s" "$PATTERN" | jq -r '.seen_count // 0')
 LAST_SEEN=$(printf "%s" "$PATTERN" | jq -r '.last_seen // "never"')
 SOURCE=$(printf "%s" "$PATTERN" | jq -r '.source // "agent-learned"')
@@ -68,14 +72,15 @@ NOTIFY_LINE=$([ "$NOTIFY" = "true" ] && echo "🔔 是" || echo "🔕 否")
 cat <<MARKDOWN
 # pattern: ${ID}
 
+**一句话说明**: ${DESCR:-_（无）_}
 **类别**: ${CAT_FRIENDLY}
 **严重度**: ${SEV_FRIENDLY}
 **自动重跑**: ${AUTO_LINE}
 **通知**: ${NOTIFY_LINE}
 
-## 描述
+## 通俗解释
 
-${DESCR:-_（暂无描述。可以由 /weekly-report 或人工补充。）_}
+${HUMAN_EXPL:-_（暂无通俗解释。可由 /weekly-report 或人工补充。）_}
 
 ## 匹配规则
 
@@ -85,9 +90,13 @@ ${DESCR:-_（暂无描述。可以由 /weekly-report 或人工补充。）_}
 ${MATCH}
 \`\`\`
 
-## 推荐处理
+## 默认处理策略
 
 ${ACTION}
+
+## 修复建议（具体步骤）
+
+${ACTION_SUG:-_（暂无修复建议。可由 /weekly-report 或人工补充。）_}
 
 ## 已观察
 

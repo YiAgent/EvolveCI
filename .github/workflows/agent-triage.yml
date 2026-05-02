@@ -1,8 +1,13 @@
 # /triage — every 15 min, plus manual workflow_dispatch.
-# Shared LLM/secret/wrapper boilerplate lives in _call-harness.yml.
-# permissions MUST be declared here too (GitHub requires the calling job to
-# pre-grant a superset of what the called workflow requests; superset cannot
-# be inherited through workflow_call).
+#
+# Architecture (v5.1 agent-when-needed):
+#   1) collect: deterministic Python step queries gh, fingerprints, runs Tier
+#      1/2 classification, emits triage-input.json to $GITHUB_OUTPUT.
+#   2) triage:  the harness invokes the agent with that JSON injected into
+#      the prompt body as DATA_CONTEXT — agent does no data collection.
+#
+# Agent allow-list contains *no* python/pip — the install lives in the
+# collect job, which never touches the agent's runner.
 name: "Agent — CI Triage"
 
 on:
@@ -27,13 +32,46 @@ permissions:
   id-token: write       # harden-runner
 
 jobs:
+  collect:
+    runs-on: ubuntu-latest
+    outputs:
+      context: ${{ steps.data.outputs.context }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pyyaml
+        run: python3 -m pip install --quiet --user pyyaml
+
+      - id: data
+        name: Collect failures + Tier 1/2 classify
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_PAT || secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PATTERNS_SOURCE: issues
+        run: |
+          set -euo pipefail
+          python3 scripts/build-triage-input.py \
+            --since 30m --max-failures 10 \
+            --out /tmp/triage-input.json
+          {
+            echo "context<<TRIAGE_EOF"
+            cat /tmp/triage-input.json
+            echo "TRIAGE_EOF"
+          } >> "$GITHUB_OUTPUT"
+
   triage:
+    needs: collect
     uses: ./.github/workflows/_call-harness.yml
     with:
       task: triage
-      prompt: ${{ inputs.prompt || '/triage' }}
-      max-turns: 30
-      timeout-minutes: 20
-      # Triage runs the log-redaction shell script on raw CI logs.
-      extra-allowed-tools: "Bash(bash lib/redact-log.sh),Bash(bash lib/),Bash(cut),Bash(tr)"
+      prompt: |-
+        ${{ inputs.prompt || '/triage' }}
+        ---
+        DATA_CONTEXT:
+        ${{ needs.collect.outputs.context }}
+      # Tier 3 path only — preprocessor handles everything else.
+      max-turns: 15
+      timeout-minutes: 15
+      # No python / pip needed — DATA_CONTEXT is already in the prompt.
+      extra-allowed-tools: "Bash(jq),Bash(bash lib/redact-log.sh)"
     secrets: inherit

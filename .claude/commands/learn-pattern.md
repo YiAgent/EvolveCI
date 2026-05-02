@@ -71,7 +71,7 @@ fi
 
 ## 不做什么
 
-- 不写 `memory/patterns/known-patterns.json`
+- 不写本地文件
 - 不 git commit
 - 不 push 任何分支
 - 永远不要从用户输入直接拼接 regex（必须经过校验）
