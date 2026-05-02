@@ -1,0 +1,87 @@
+name: "EvolveCI · 新失败模式"
+description: "登记一条新的可识别 CI 失败模式 (Tier 1 自动匹配的源)。一般由 /learn-pattern 自动创建；人工补充时也走此模板。"
+title: "pattern: <id-kebab-case>"
+labels: ["evolveci/pattern"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > **结构契约**: body 的最后一段必须是 ` ```json ` 围起来的 JSON 对象，
+        > triage 通过 awk 抽取这一段做正则匹配。其它段是给人看的。
+        >
+        > **正则安全**: `match` 字段长度 ≤200 字符，禁止嵌套量词
+        > (`(.*)+`、`(.+)+`、`(.+)*`)。`/learn-pattern` 会校验。
+
+  - type: input
+    id: pattern-id
+    attributes:
+      label: "pattern id (kebab-case)"
+      description: "稳定标识，例如 `npm-eai-again`、`docker-daemon-fail`。后续 fingerprint label 不会改名。"
+      placeholder: "<service>-<symptom>"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: "category"
+      options: [flaky, infra, code, dependency, unknown]
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: "severity"
+      options: [info, warning, critical]
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: "## 描述"
+      description: "1-2 句中文：这个 pattern 是什么 / 在什么场景下出现。"
+    validations:
+      required: true
+
+  - type: textarea
+    id: regex
+    attributes:
+      label: "## 匹配正则"
+      description: "用脱敏日志能命中的最小正则。≤200 字符，禁止嵌套量词。"
+      render: regex
+    validations:
+      required: true
+
+  - type: textarea
+    id: fix-hint
+    attributes:
+      label: "## 修复建议"
+      description: "命中后人/agent 该怎么处理。最少一句话可执行步骤。"
+    validations:
+      required: true
+
+  - type: textarea
+    id: machine-readable
+    attributes:
+      label: "## 机器可读 JSON (triage 解析此块)"
+      description: |
+        必须是单一 JSON 对象。triage 用以下 awk 抽取：
+        `awk '/^```json$/{f=1;next}/^```$/{f=0}f'`
+      render: json
+      value: |
+        {
+          "id": "",
+          "match": "",
+          "category": "flaky",
+          "severity": "info",
+          "auto_rerun": true,
+          "notify": false,
+          "description": "",
+          "fix_hint": "",
+          "seen_count": 1,
+          "source": "agent-learned"
+        }
+    validations:
+      required: true

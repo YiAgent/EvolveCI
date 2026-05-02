@@ -1,0 +1,69 @@
+name: "EvolveCI · Triage 失败"
+description: "（一般由 /triage agent 自动创建。手动汇报 CI 失败时也可用此模板。）"
+title: "<repo> · <workflow> · <step> failure"
+labels: ["evolveci/triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > **此 issue 通常由 `/triage` 自动写入。** 同一 fingerprint 的失败会
+        > 累加到同一条 issue（comment + body 中的 `occurrences:` 计数）。
+        > 手动新建时请把字段补全 — 缺字段会让聚合脚本忽略此条。
+
+  - type: input
+    id: fingerprint
+    attributes:
+      label: "fingerprint (12 hex)"
+      description: "sha256(error_lines + step_name) 的前 12 字节。手动建 issue 时可空，由 agent 后续补上。"
+      placeholder: "a1b2c3d4e5f6"
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: "category"
+      options: [flaky, infra, code, dependency, unknown]
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: "severity"
+      options: [info, warning, critical]
+    validations:
+      required: true
+
+  - type: input
+    id: run-url
+    attributes:
+      label: "run URL"
+      placeholder: "https://github.com/<org>/<repo>/actions/runs/<id>"
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: "## 摘要"
+      description: "一句话说清楚：哪个 workflow、哪一步、什么错。"
+    validations:
+      required: true
+
+  - type: textarea
+    id: root-cause
+    attributes:
+      label: "## 根因猜测"
+      description: "如果 Tier 1 命中已知 pattern，写 pattern_id；否则写 agent 的推断。"
+
+  - type: textarea
+    id: fix
+    attributes:
+      label: "## 修复建议"
+      description: "可执行步骤。优先引用对应 pattern 的 fix_hint。"
+
+  - type: textarea
+    id: redacted-tail
+    attributes:
+      label: "## 脱敏日志摘要"
+      description: "失败步骤最后 ~50 行，已通过 lib/redact-log.sh 脱敏。"
+      render: text

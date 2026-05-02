@@ -26,6 +26,7 @@ SEV=$(printf "%s" "$PATTERN" | jq -r '.severity // "info"')
 AUTO=$(printf "%s" "$PATTERN" | jq -r '.auto_rerun // false')
 NOTIFY=$(printf "%s" "$PATTERN" | jq -r '.notify // false')
 DESCR=$(printf "%s" "$PATTERN" | jq -r '.description // ""')
+FIX_HINT=$(printf "%s" "$PATTERN" | jq -r '.fix_hint // ""')
 SEEN_COUNT=$(printf "%s" "$PATTERN" | jq -r '.seen_count // 0')
 LAST_SEEN=$(printf "%s" "$PATTERN" | jq -r '.last_seen // "never"')
 SOURCE=$(printf "%s" "$PATTERN" | jq -r '.source // "agent-learned"')
@@ -88,6 +89,10 @@ ${MATCH}
 ## 推荐处理
 
 ${ACTION}
+
+## 修复建议
+
+${FIX_HINT:-_（暂无修复建议。可由 /weekly-report 或人工补充。）_}
 
 ## 已观察
 

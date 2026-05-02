@@ -66,25 +66,33 @@ runs:
           --label "ci:circuit-broken,severity/critical" \
           2>/dev/null) || echo "::warning::Failed to create issue"
 
-        # Update memory/circuit/state.json (v4 agent-driven state)
+        # Update circuit state on the single evolveci/circuit issue (v5 issues-as-memory).
+        # We *upsert* the body JSON. Schema:
+        #   { active, reason, tripped_at, tripped_dimension, auto_recover_at }
         NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
         RECOVER_AT=$(date -u -d "+24 hours" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
                      date -u -v+24H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "")
 
-        if [ -f "memory/circuit/state.json" ]; then
-          jq \
-            --arg reason "$REASON ($DIMENSION budget exceeded for $REPO/$WORKFLOW)" \
-            --arg tripped_at "$NOW" \
-            --arg dimension "$DIMENSION" \
-            --arg recover_at "$RECOVER_AT" \
-            '.active = true |
-             .reason = $reason |
-             .tripped_at = $tripped_at |
-             .tripped_dimension = $dimension |
-             .auto_recover_at = $recover_at' \
-            memory/circuit/state.json > /tmp/circuit-state.json && \
-            mv /tmp/circuit-state.json memory/circuit/state.json || \
-            echo "::warning::Failed to update memory/circuit/state.json"
+        STATE_JSON=$(jq -nc \
+          --arg reason "$REASON ($DIMENSION budget exceeded for $REPO/$WORKFLOW)" \
+          --arg tripped_at "$NOW" \
+          --arg dimension "$DIMENSION" \
+          --arg recover_at "$RECOVER_AT" \
+          '{active: true, reason: $reason, tripped_at: $tripped_at, tripped_dimension: $dimension, auto_recover_at: $recover_at}')
+
+        EXISTING=$(gh issue list --repo "$REPO" --label evolveci/circuit \
+                     --state all -L 1 --json number --jq '.[0].number // empty')
+
+        if [ -n "$EXISTING" ]; then
+          gh issue edit "$EXISTING" --repo "$REPO" --body "$STATE_JSON" >/dev/null \
+            || echo "::warning::Failed to update evolveci/circuit issue #$EXISTING"
+          gh issue reopen "$EXISTING" --repo "$REPO" >/dev/null 2>&1 || true
+        else
+          gh issue create --repo "$REPO" \
+            --title "circuit: tripped" \
+            --label "evolveci/circuit,severity/critical" \
+            --body "$STATE_JSON" >/dev/null \
+            || echo "::warning::Failed to create evolveci/circuit issue"
         fi
 
         echo "::error::Circuit breaker tripped: $DIMENSION budget exceeded for $REPO/$WORKFLOW"

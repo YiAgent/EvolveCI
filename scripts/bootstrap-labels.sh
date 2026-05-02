@@ -30,7 +30,7 @@ echo "Creating EvolveCI labels in $REPO..."
 ensure "evolveci/triage"    "d73a4a" "EvolveCI agent — CI failure observation (one issue per fingerprint)"
 ensure "evolveci/heartbeat" "fbca04" "EvolveCI agent — active health alert (≤1 open at a time)"
 ensure "evolveci/daily"     "0e8a16" "EvolveCI agent — daily report (one per calendar date)"
-ensure "evolveci/pattern"   "1d76db" "EvolveCI agent — known failure pattern (replaces memory/patterns)"
+ensure "evolveci/pattern"   "1d76db" "EvolveCI agent — known failure pattern (Tier 1 catalogue)"
 ensure "evolveci/circuit"   "5319e7" "EvolveCI agent — circuit-breaker state (≤1 open at a time)"
 
 # ── Severity labels ─────────────────────────────────────────────────────────

@@ -290,46 +290,21 @@ test_agent_memory() {
     fi
   done
 
-  # Memory directories
-  local required_dirs=(
-    "memory/patterns"
-    "memory/incidents"
-    "memory/stats/daily"
-    "memory/stats/weekly"
-    "memory/fingerprints"
-    "memory/flaky-tests"
-    "memory/circuit"
-    "memory/counters"
-  )
-  for dir in "${required_dirs[@]}"; do
-    if [ -d "$PROJECT_ROOT/$dir" ]; then
-      pass "Exists: $dir/"
+  # Pattern seed catalogue (replaces the legacy memory/patterns/ checks).
+  if [ -f "$PROJECT_ROOT/data/known-patterns.seed.json" ]; then
+    pass "data/known-patterns.seed.json exists"
+    if python3 -c "import json; d=json.load(open('$PROJECT_ROOT/data/known-patterns.seed.json')); assert len(d) >= 10" 2>/dev/null; then
+      pass "known-patterns.seed.json has ≥10 patterns"
     else
-      fail "Missing: $dir/"
+      fail "known-patterns.seed.json has fewer than 10 patterns"
     fi
-  done
-
-  # Memory key files
-  if [ -f "$PROJECT_ROOT/memory/patterns/known-patterns.json" ]; then
-    pass "memory/patterns/known-patterns.json exists"
-    if python3 -c "import json; d=json.load(open('$PROJECT_ROOT/memory/patterns/known-patterns.json')); assert len(d) >= 10" 2>/dev/null; then
-      pass "known-patterns.json has ≥10 patterns"
+    if python3 -c "import json; d=json.load(open('$PROJECT_ROOT/data/known-patterns.seed.json')); assert all('description' in p and 'fix_hint' in p for p in d)" 2>/dev/null; then
+      pass "every seed pattern carries description + fix_hint"
     else
-      fail "known-patterns.json has fewer than 10 patterns"
+      fail "some seed patterns are missing description or fix_hint"
     fi
   else
-    fail "memory/patterns/known-patterns.json not found"
-  fi
-
-  if [ -f "$PROJECT_ROOT/memory/circuit/state.json" ]; then
-    pass "memory/circuit/state.json exists"
-    if python3 -c "import json; d=json.load(open('$PROJECT_ROOT/memory/circuit/state.json')); assert 'active' in d" 2>/dev/null; then
-      pass "memory/circuit/state.json has valid schema"
-    else
-      fail "memory/circuit/state.json missing 'active' field"
-    fi
-  else
-    fail "memory/circuit/state.json not found"
+    fail "data/known-patterns.seed.json not found"
   fi
 }
 

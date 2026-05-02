@@ -129,6 +129,5 @@ PR 由人评审后 squash-merge。`/weekly-report` **不**自动 admin merge —
 ## 不做什么
 
 - 不直接 push 到 main
-- 不写 `memory/stats/weekly/`
 - 不 close 还在 open 的 `evolveci/triage`（除非 `status/recovered` 已经存在
   且 ≥7 天没新动作）

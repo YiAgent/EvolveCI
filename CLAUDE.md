@@ -45,12 +45,10 @@
 
 ### 记忆 / 状态规则
 
-- **不再向 `memory/` 写文件，不再 git commit 状态**。所有持久化经过 GitHub
-  Issues。
+- **不写文件、不 git commit 状态**。所有持久化经过 GitHub Issues。
 - **去重**通过 `fingerprint:<12hex>` 标签实现：相同失败 → 累加到同一 issue。
 - **每周** `/weekly-report` 是唯一动 git 的命令；它在 `weekly/<iso-week>` 分支
   上更新本文件的"近期学习"章节，并打开 PR 等待 squash-merge。
-- 旧 `memory/` 目录保留为只读历史归档；任何代码都不应再读它，未来一次清理 PR 会删除它。
 
 ## 快速参考
 
@@ -109,6 +107,7 @@ _（初始状态，尚无学习记录）_
 
 ## 版本历史
 
+- **v5.1 (2026-05)**: Agent-When-Needed。确定性 pipeline (composite actions + 脚本) 做收集 + Tier 1/2 分类，agent 仅处理 Tier 3 unknowns 与人类可读报告。Agent turn 预算大幅下降；agent 不再直接查 gh / 解日志。`memory/` 目录正式删除。
 - **v5.0 (2026-05)**: 记忆模型从 `memory/` 文件迁移到 GitHub Issues（`evolveci/*` 标签）。日报 / 心跳 / triage 全部通过 issue upsert，weekly 通过 PR 更新 CLAUDE.md。git 历史不再被状态写入污染。
 - **v4.0 (2026-05)**: Agent 驱动架构，Claude 直接持有记忆，通过 git commit 积累经验。
 - **v3.0 (2026-05)**: 全能力版本（fingerprint + 聚类 + retry + auto-fix），孤儿分支状态存储。

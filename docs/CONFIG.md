@@ -19,12 +19,13 @@ through normal review.
 
 | File | Purpose | Schema |
 |------|---------|--------|
-| `data/onboarded-repos.yml` | Which repos `/triage` monitors. Per-repo workflow allow / exclude lists, priority. | `repos: [{ name, workflows, priority, exclude? }]` |
+| `data/onboarded-repos.yml` | Which repos `/triage` monitors. Per-repo workflow allow / exclude lists, priority, private flag. | `repos: [{ name, workflows, priority, exclude?, private? }]` |
 | `data/circuit-config.yml` | Circuit-breaker rerun budgets and `no_rerun` keyword guard. | `dimensions: { workflow, pattern, repo }`, `no_rerun: [...]` |
-| `data/known-patterns.seed.json` | Seed regex catalogue Tier 1 matches against. Promoted into `memory/patterns/known-patterns.json` on first run. | `[{ id, match, category, severity, action, ... }]` |
+| `data/known-patterns.seed.json` | Seed regex catalogue Tier 1 matches against. Seeded into `evolveci/pattern` issues on first run via `scripts/seed-patterns.sh`. | `[{ id, match, category, severity, description, fix_hint, ... }]` |
 
-Live (mutable) state lives in `memory/` and is owned by the agent —
-**don't hand-edit unless recovering from corruption**.
+Live (mutable) state lives entirely in `evolveci/*`-labelled GitHub Issues —
+see [`docs/MEMORY-MODEL.md`](./MEMORY-MODEL.md) for the schema. There is no
+on-disk state to hand-edit.
 
 ---
 
@@ -121,6 +122,6 @@ Minimum to run:
 Optional but recommended:
 
 - **secret** `GLM_BASE_URL` — overrides the hard-coded default endpoint.
-- **secret** `CROSS_REPO_PAT` — needed if `data/onboarded-repos.yml` references repos outside this repo's `GITHUB_TOKEN` scope.
+- **secret** `CROSS_REPO_PAT` — required if any onboarded repo is private (e.g. `YiAgent/aicert`) or lives outside this repo's `GITHUB_TOKEN` scope. Needs `repo` scope (read+write on issues, read on actions) for every onboarded private repo.
 - **secret** `SLACK_CI_WEBHOOK` — without it, Slack alerts fall through silently (workflows still succeed).
 - **var** `CLAUDE_MODEL` — pin to a specific model id without editing workflow files.

@@ -116,6 +116,6 @@ fi
 
 ## 不做什么
 
-- 不写 `memory/stats/daily/<date>.json`
+- 不写本地文件
 - 不 git commit
 - 不 push 任何分支

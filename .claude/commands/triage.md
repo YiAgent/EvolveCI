@@ -25,7 +25,7 @@ TRIPPED=$(echo "$BODY" | jq -r '.tripped_at // empty')
 ### 步骤 2：加载上下文
 
 - `data/onboarded-repos.yml` — 监控仓库列表（仍是文件）。
-- 已知 patterns（替换原 `memory/patterns/known-patterns.json`）：每个 pattern
+- 已知 patterns：每个 pattern
   issue 的 body 是 markdown，机器可读 JSON 嵌在末尾的 \`\`\`json 代码块里。
   用 awk 提取：
 
@@ -151,6 +151,6 @@ EOF
 
 ## 不做什么
 
-- 不写 `memory/incidents/`、`memory/fingerprints/`、`memory/counters/`
+- 不写本地文件
 - 不 git commit
 - 不 push 任何分支
