@@ -22,13 +22,32 @@ COUNT=$(gh issue list --label evolveci/triage --state all \
 
 `COUNT == 0` → **失败**：triage 超过 24 小时未运行。
 
-### 探针 2：模式库健康（关键）
+### 探针 2：模式库健康（关键 + 自愈）
 
 ```bash
 COUNT=$(gh issue list --label evolveci/pattern --state all -L 100 --json number | jq length)
 ```
 
-`COUNT < 10` → **失败**：模式库条目过少（首次运行后应已从 `data/known-patterns.seed.json` 种入）。
+如果 `COUNT == 0`（首次运行）：**自动从 `data/known-patterns.seed.json`
+种入**——为每条 seed 创建一个 `evolveci/pattern` Issue，body 是该 seed 的 JSON：
+
+```bash
+if [ "$COUNT" = "0" ] && [ -f data/known-patterns.seed.json ]; then
+  jq -c '.[]' data/known-patterns.seed.json | while read -r p; do
+    ID=$(echo "$p" | jq -r .id)
+    SEV=$(echo "$p" | jq -r '.severity // "info"')
+    CAT=$(echo "$p" | jq -r '.category // "unknown"')
+    gh issue create \
+      --title "pattern: ${ID}" \
+      --label "evolveci/pattern,severity/${SEV},category:${CAT}" \
+      --body "$p"
+  done
+  COUNT=$(jq length data/known-patterns.seed.json)
+fi
+```
+
+种入后 `COUNT < 10` → **失败**：模式库条目过少（seed 文件可能损坏）。
+否则 → **PASS**。
 
 ### 探针 3：统计数据新鲜度（警告）
 
