@@ -33,6 +33,9 @@
 
 ## 写入 Issue
 
+Issue body 是 markdown 格式（人可读）+ 末尾 fenced JSON 代码块（triage 解析回来）。
+渲染由 `scripts/render-pattern.sh` 完成——把 JSON 喂给它即可。
+
 ```bash
 PATTERN_JSON=$(jq -nc \
   --arg id "$ID" \
@@ -44,9 +47,11 @@ PATTERN_JSON=$(jq -nc \
   --arg description "$DESCRIPTION" \
   --argjson examples "$EXAMPLES_JSON_ARRAY" \
   '{id:$id, match:$match, category:$category, severity:$severity,
-    auto_rerun:$auto_rerun, notify:$notify,
-    description:$description, examples:$examples,
+    auto_rerun:$auto_rerun, notify:$notify, description:$description,
+    examples:$examples, source:"agent-learned",
     learned_at: now | strftime("%Y-%m-%dT%H:%M:%SZ")}')
+
+BODY=$(printf '%s' "$PATTERN_JSON" | bash scripts/render-pattern.sh)
 
 # 检查是否已经存在同 id 的 pattern issue
 EXISTING=$(gh issue list --label evolveci/pattern --search "in:title pattern: ${ID}" \
@@ -55,12 +60,12 @@ EXISTING=$(gh issue list --label evolveci/pattern --search "in:title pattern: ${
 if [ -n "$EXISTING" ]; then
   # 已有同名 → 视情况编辑（更新描述 / 加 examples）
   gh issue comment "$EXISTING" --body "${ID} 重新学习于 $(date -u +%FT%TZ)"
-  gh issue edit "$EXISTING" --body "$PATTERN_JSON"
+  gh issue edit "$EXISTING" --body "$BODY"
 else
   gh issue create \
     --title "pattern: ${ID}" \
     --label "evolveci/pattern,severity/${SEVERITY},category:${CATEGORY}" \
-    --body "$PATTERN_JSON"
+    --body "$BODY"
 fi
 ```
 

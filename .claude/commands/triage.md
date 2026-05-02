@@ -25,13 +25,17 @@ TRIPPED=$(echo "$BODY" | jq -r '.tripped_at // empty')
 ### 步骤 2：加载上下文
 
 - `data/onboarded-repos.yml` — 监控仓库列表（仍是文件）。
-- 已知 patterns（替换原 `memory/patterns/known-patterns.json`）：
+- 已知 patterns（替换原 `memory/patterns/known-patterns.json`）：每个 pattern
+  issue 的 body 是 markdown，机器可读 JSON 嵌在末尾的 \`\`\`json 代码块里。
+  用 awk 提取：
 
   ```bash
   gh issue list --label evolveci/pattern --state all -L 100 \
-    --json body --jq '.[].body' | while read -r b; do
-      echo "$b" | jq -c .   # 每个 pattern 是 body 里的 JSON 对象
-    done > /tmp/patterns.jsonl
+    --json body --jq '.[].body' | awk '
+      /^```json$/ { in_block=1; next }
+      /^```$/     { in_block=0; next }
+      in_block    { print }
+    ' > /tmp/patterns.jsonl
   ```
 
 - 当日重跑计数器：放在内存（无需持久化文件）；超出预算时通过 step 4d 在

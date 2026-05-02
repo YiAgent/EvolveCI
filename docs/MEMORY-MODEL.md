@@ -96,13 +96,21 @@ PRs are reviewed by humans and squash-merged. (You can flip the agent to
 
 ### `/learn-pattern`
 
-A single `gh issue create` writes the pattern as JSON in the body, labeled
-`evolveci/pattern`. Triage reads patterns via:
+Pattern issues use a **dual-format body**: human-readable markdown on top
+(category, severity, regex, recommended action, observation history),
+machine-readable JSON in a fenced code block at the bottom. Both
+`scripts/seed-patterns.sh` and `/learn-pattern` go through
+`scripts/render-pattern.sh` to produce the body.
 
-```
+Triage extracts the JSON for matching:
+
+```bash
 gh issue list --label evolveci/pattern -L 100 --json body --jq '.[].body' \
-  | while read -r b; do echo "$b" | jq -c .; done
+  | awk '/^```json$/{f=1;next}/^```$/{f=0}f' > /tmp/patterns.jsonl
 ```
+
+Each line of `/tmp/patterns.jsonl` is one pattern object. The agent iterates
+through them for Tier-1 regex matching.
 
 ### `/check-circuit`
 
