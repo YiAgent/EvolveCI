@@ -34,15 +34,23 @@ ensure "evolveci/pattern"   "1d76db" "EvolveCI agent — known failure pattern (
 ensure "evolveci/circuit"   "5319e7" "EvolveCI agent — circuit-breaker state (≤1 open at a time)"
 
 # ── Severity labels ─────────────────────────────────────────────────────────
+# Canonical scheme is low | medium | high | critical (matches seed patterns,
+# issue templates, and the classify-failure-sonnet prompt). info / warning
+# are kept for backward compatibility with old daily / heartbeat / circuit
+# issues that already carry them.
 ensure "severity/critical"  "b60205" "Severity — critical: blocks pipelines or risks data"
-ensure "severity/warning"   "fbca04" "Severity — warning: degrades but not blocking"
-ensure "severity/info"      "c2e0c6" "Severity — informational"
+ensure "severity/high"      "d93f0b" "Severity — high: significant impact"
+ensure "severity/medium"    "fbca04" "Severity — medium: degrades but not blocking"
+ensure "severity/low"       "c2e0c6" "Severity — low: informational / minor"
+ensure "severity/warning"   "fbca04" "Severity — warning (legacy alias of medium)"
+ensure "severity/info"      "c2e0c6" "Severity — informational (legacy alias of low)"
 
 # ── Category labels (failure taxonomy used by triage) ───────────────────────
 ensure "category:flaky"      "fef2c0" "Category — flaky / non-deterministic"
 ensure "category:infra"      "fef2c0" "Category — runner / infrastructure issue"
 ensure "category:code"       "fef2c0" "Category — code defect"
 ensure "category:dependency" "fef2c0" "Category — dependency / package issue"
+ensure "category:security"   "fef2c0" "Category — security / secrets / auth"
 ensure "category:unknown"    "fef2c0" "Category — needs deeper investigation"
 
 # ── Status labels ────────────────────────────────────────────────────────────

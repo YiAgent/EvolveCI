@@ -185,6 +185,25 @@ def main() -> int:
             })
         return out
 
+    # Circuit-breaker history: any evolveci/circuit issue that opened or
+    # closed inside the window. We don't keep a separate timeline yet, so the
+    # closest signal is the issue's createdAt/closedAt pair.
+    circuit_history_raw = gh_issues_json([
+        "issue", "list", "--repo", dedup_repo,
+        "--label", "evolveci/circuit", "--state", "all",
+        "--search", f"updated:>{since_iso}", "-L", "20",
+        "--json", "number,title,state,createdAt,closedAt",
+    ])
+    circuit_history = [
+        {
+            "number":       it.get("number"),
+            "tripped_at":   it.get("createdAt"),
+            "recovered_at": it.get("closedAt"),
+            "state":        it.get("state"),
+        }
+        for it in circuit_history_raw
+    ]
+
     out = {
         "schema_version": 1,
         "iso_week": f"{iso_year}-W{iso_week:02d}",
@@ -205,6 +224,7 @@ def main() -> int:
             "mttr_hours_p95":    mttr_p95,
         },
         "dora": dora,
+        "circuit_history": circuit_history,
         "no_data": totals["runs"] == 0,
     }
     Path(args.out).write_text(json.dumps(out, indent=2, ensure_ascii=False))

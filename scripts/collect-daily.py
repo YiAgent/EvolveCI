@@ -207,7 +207,7 @@ def main() -> int:
     ]
 
     # ── Issue-derived signals (triage / patterns / circuit) ────────────────
-    dedup_repo = args.dedup_repo or repo_names[0] if repo_names else ""
+    dedup_repo = args.dedup_repo or (repo_names[0] if repo_names else "")
 
     new_triage = gh_issues_json([
         "issue", "list", "--repo", dedup_repo,
@@ -298,7 +298,7 @@ def main() -> int:
         "top3_failures_with_logs": top3,
         "triage": {
             "new": {"count": len(new_triage), "samples": issue_summary(new_triage)},
-            "open_old": {"count": len(open_old_triage), "samples": issue_summary(open_old_triage)},
+            "open_24h": {"count": len(open_old_triage), "samples": issue_summary(open_old_triage)},
             "patterns_added": {"count": len(new_patterns), "samples": issue_summary(new_patterns)},
         },
         "circuit": circuit,

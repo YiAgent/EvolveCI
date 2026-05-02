@@ -45,19 +45,21 @@ from pathlib import Path
 
 # ─── Tier 2 heuristic rules (mirror analyzers/classify-heuristic) ──────────
 # (regex, category, severity, confidence, auto_rerun, notify)
+# severity vocabulary is the canonical low|medium|high|critical (matches
+# data/known-patterns.seed.json + prompts/observability/classify-failure-sonnet.md).
 HEURISTIC_RULES: list[tuple[str, str, str, str, bool, bool]] = [
     (r"ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ReadTimeoutError|context deadline exceeded",
-     "flaky", "info", "high", True, False),
+     "flaky", "low", "high", True, False),
     (r"rate.?limit|429|too many requests|toomanyrequests",
-     "flaky", "info", "high", True, False),
+     "flaky", "low", "high", True, False),
     (r"runner.*did not connect|runner.*failed to start|No space left on device",
-     "flaky", "warning", "medium", True, False),
+     "flaky", "medium", "medium", True, False),
     (r"Permission denied|403 Forbidden|authentication failed|unauthorized",
      "infra", "critical", "high", False, True),
     (r"npm ERR!|pip install.*error|go:.*module.*not found|resolve.*version.*conflict",
-     "dependency", "warning", "medium", False, True),
+     "dependency", "medium", "medium", False, True),
     (r"FAIL|AssertionError|SyntaxError|TypeError|Compilation failed|Test failed",
-     "code", "warning", "medium", False, True),
+     "code", "medium", "medium", False, True),
     (r"docker.*daemon|OOM|Cannot allocate memory|CrashLoopBackOff|ImagePullBackOff",
      "infra", "critical", "medium", False, True),
 ]
@@ -130,12 +132,22 @@ def load_patterns(source: str, seed_path: Path, dedup_repo: str | None) -> list[
 
 
 def run_redact(text: str) -> str:
-    """Pipe through lib/redact-log.sh; fall back to identity if missing."""
+    """Pipe through lib/redact-log.sh; fail closed (return "") if missing or
+    if the redactor errors. Returning the raw tail would leak secrets/PII into
+    triage-input.json, so an unredacted log is no log at all."""
     if not REDACT_SH.exists():
-        return text
+        sys.stderr.write(
+            f"WARN: redactor missing at {REDACT_SH}; dropping log to fail closed\n"
+        )
+        return ""
     proc = subprocess.run(["bash", str(REDACT_SH)], input=text,
                           capture_output=True, text=True)
-    return proc.stdout if proc.returncode == 0 else text
+    if proc.returncode != 0:
+        sys.stderr.write(
+            f"WARN: redactor exit {proc.returncode}; dropping log to fail closed\n"
+        )
+        return ""
+    return proc.stdout
 
 
 def fingerprint(redacted: str, step_name: str) -> str:
@@ -143,7 +155,11 @@ def fingerprint(redacted: str, step_name: str) -> str:
         line for line in redacted.splitlines()
         if re.search(r"error|fail|fatal|panic|exception", line, re.I)
     )[-1000:]
-    composite = f"{step_name}::{error_lines}"
+    # Fall back to the last 1000 chars of the redacted log when no error
+    # keyword matches, otherwise common step names like "test" or "install"
+    # would collapse unrelated failures into a single fingerprint.
+    fingerprint_basis = error_lines or redacted[-1000:]
+    composite = f"{step_name}::{fingerprint_basis}"
     return hashlib.sha256(composite.encode("utf-8")).hexdigest()[:12]
 
 
@@ -158,7 +174,7 @@ def match_tier1(log: str, patterns: list[dict]) -> dict:
                     "matched": True,
                     "pattern_id": p.get("id"),
                     "category": p.get("category", "unknown"),
-                    "severity": p.get("severity", "info"),
+                    "severity": p.get("severity", "low"),
                     "auto_rerun": bool(p.get("auto_rerun", False)),
                     "notify": bool(p.get("notify", False)),
                     # action_suggestion is the v5.1 field; fall back to legacy
@@ -179,7 +195,7 @@ def match_tier2(log: str) -> dict:
                 "confidence": conf, "auto_rerun": rerun, "notify": notify,
             }
     return {
-        "classified": False, "category": "unknown", "severity": "warning",
+        "classified": False, "category": "unknown", "severity": "medium",
         "confidence": "low", "auto_rerun": False, "notify": True,
     }
 
@@ -296,7 +312,7 @@ def main() -> int:
             tier1 = match_tier1(log, patterns) if log else {"matched": False}
             tier2 = match_tier2(log) if log else {
                 "classified": False, "category": "unknown",
-                "severity": "warning", "confidence": "low",
+                "severity": "medium", "confidence": "low",
                 "auto_rerun": False, "notify": True,
             }
 
@@ -317,7 +333,8 @@ def main() -> int:
                 "tier1": tier1,
                 "tier2": tier2,
                 "needs_tier3": (
-                    not tier1.get("matched", False)
+                    bool(log)
+                    and not tier1.get("matched", False)
                     and tier2.get("confidence") in ("low", "medium")
                     and not existing
                 ),

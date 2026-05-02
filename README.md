@@ -12,7 +12,7 @@ GitHub Actions 流水线，自动分诊失败、累积经验、自我进化 — 
 
 > **确定性流水线做 90% 的工作；Agent 只在真正需要判断时介入。**
 
-```
+```text
 确定性 pipeline (composite actions + scripts)
   ├─ 收集: gh run 数据 → JSON
   ├─ 脱敏: 原始日志 → 安全日志
@@ -21,10 +21,10 @@ GitHub Actions 流水线，自动分诊失败、累积经验、自我进化 — 
   └─ 聚合: MTTR / flakiness / trends
 
 Agent (小而专注)
-  ├─ /triage     处理 Tier 3 unknown 失败 + 写 issue
-  ├─ /daily      读 JSON → 写中文日报
-  ├─ /weekly     读 JSON → 开 PR 更新 CLAUDE.md
-  └─ /heartbeat  读探针结果 → 维护 1 个 health issue
+  ├─ /triage         处理 Tier 3 unknown 失败 + 写 issue
+  ├─ /daily-report   读 JSON → 写中文日报
+  ├─ /weekly-report  读 JSON → 开 PR 更新 CLAUDE.md
+  └─ /heartbeat      读探针结果 → 维护 1 个 health issue
 ```
 
 跨运行的状态全部存在 GitHub Issues 里 (label `evolveci/*`)，**不再写本地文件
@@ -122,7 +122,7 @@ bash scripts/refresh-pattern-descriptions.sh org/repo
 
 ## 项目结构
 
-```
+```text
 EvolveCI/
 ├── CLAUDE.md                       Agent 身份 + 安全规则
 ├── .claude/commands/               Slash commands (Agent 技能)

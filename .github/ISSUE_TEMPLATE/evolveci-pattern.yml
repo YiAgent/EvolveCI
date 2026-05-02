@@ -25,7 +25,7 @@ body:
     id: category
     attributes:
       label: "category"
-      options: [flaky, infra, code, dependency, unknown]
+      options: [flaky, infra, code, dependency, security, unknown]
     validations:
       required: true
 
@@ -33,7 +33,7 @@ body:
     id: severity
     attributes:
       label: "severity"
-      options: [info, warning, critical]
+      options: [low, medium, high, critical]
     validations:
       required: true
 
@@ -75,7 +75,7 @@ body:
           "id": "",
           "match": "",
           "category": "flaky",
-          "severity": "info",
+          "severity": "low",
           "auto_rerun": true,
           "notify": false,
           "description": "",

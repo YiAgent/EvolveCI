@@ -96,8 +96,9 @@ EOF
 
 我读 `redacted_tail` 字段，分析：
 
-1. **类别** (flaky / infra / code / dependency / unknown) — 一句话理由
-2. **严重度** (info / warning / critical)
+1. **类别** (flaky / infra / code / dependency / security / unknown) — 一句话理由
+2. **严重度** (low / medium / high / critical) — 与 seed pattern、Sonnet prompt、
+   issue template 全部对齐
 3. **根因猜测** — 1-3 句
 4. **修复建议** — 可执行步骤
 5. （可选）**新 pattern** — 如果这个失败模式可能复现，调用 `/learn-pattern` 写入新的

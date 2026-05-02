@@ -338,7 +338,9 @@ test_agent_prompts() {
   done
 
   # Every non-exempt command must consume DATA_CONTEXT (the prompt-injected
-  # JSON written by the workflow's collect: job).
+  # JSON written by the workflow's collect: job). Match only inside
+  # ```bash fenced blocks so a non-executable mention in prose doesn't
+  # satisfy the contract check.
   local exempt=("check-circuit.md" "learn-pattern.md" "heartbeat.md")
   for cmd in "$commands_dir"/*.md; do
     local base
@@ -348,7 +350,13 @@ test_agent_prompts() {
       [ "$base" = "$ex" ] && skip=true && break
     done
     $skip && continue
-    if grep -q 'DATA_CONTEXT' "$cmd"; then
+    local bash_only
+    bash_only=$(awk '
+      /^```bash$/ { in_block=1; next }
+      /^```$/    { in_block=0; next }
+      in_block   { print }
+    ' "$cmd")
+    if echo "$bash_only" | grep -q 'DATA_CONTEXT'; then
       pass "$base consumes DATA_CONTEXT"
     else
       fail "$base does not parse DATA_CONTEXT (the workflow-injected JSON)"

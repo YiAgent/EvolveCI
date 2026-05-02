@@ -14,14 +14,14 @@ body:
     id: fingerprint
     attributes:
       label: "fingerprint (12 hex)"
-      description: "sha256(error_lines + step_name) 的前 12 字节。手动建 issue 时可空，由 agent 后续补上。"
+      description: "sha256(error_lines + step_name) 的前 12 个十六进制字符。手动建 issue 时可空，由 agent 后续补上。"
       placeholder: "a1b2c3d4e5f6"
 
   - type: dropdown
     id: category
     attributes:
       label: "category"
-      options: [flaky, infra, code, dependency, unknown]
+      options: [flaky, infra, code, dependency, security, unknown]
     validations:
       required: true
 
@@ -29,7 +29,7 @@ body:
     id: severity
     attributes:
       label: "severity"
-      options: [info, warning, critical]
+      options: [low, medium, high, critical]
     validations:
       required: true
 

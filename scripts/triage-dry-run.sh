@@ -53,16 +53,44 @@ REPOS_JSON=$(parse_repos)
 echo "$REPOS_JSON" | jq -c '.[]' | while IFS= read -r repo; do
   NAME=$(echo "$repo" | jq -r .name)
   EXCL_JSON=$(echo "$repo" | jq -c '.exclude // []')
+  PRIVATE=$(echo "$repo" | jq -r '.private // false')
+
+  # Honor the private flag from data/onboarded-repos.yml: private repos must
+  # be queried via CROSS_REPO_PAT, not the default GITHUB_TOKEN, which only
+  # has access to the host repo.
+  TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+  if [ "$PRIVATE" = "true" ]; then
+    if [ -z "${CROSS_REPO_PAT:-}" ]; then
+      echo "{\"repo\":\"$NAME\",\"error\":\"private repo requires CROSS_REPO_PAT\"}"
+      continue
+    fi
+    TOKEN="$CROSS_REPO_PAT"
+  fi
 
   # Build a workflowDatabaseId → path map so exclude-by-filename actually works.
   # (gh run list returns the human-friendly workflowName, not the file path,
   # which is what onboarded-repos.yml exclude entries are spelled as.)
-  WF_MAP=$(gh api "repos/$NAME/actions/workflows" --paginate \
-    --jq '[.workflows[] | {key: (.id|tostring), value: .path}] | from_entries' 2>/dev/null || echo '{}')
+  # Surface auth/permission failures explicitly instead of swallowing them
+  # into '{}', otherwise a private-repo permission failure looks identical
+  # to "no failed runs", which defeats the dry-run.
+  WF_ERR=$(mktemp)
+  if ! WF_MAP=$(GH_TOKEN="$TOKEN" gh api "repos/$NAME/actions/workflows" --paginate \
+    --jq '[.workflows[] | {key: (.id|tostring), value: .path}] | from_entries' 2>"$WF_ERR"); then
+    echo "{\"repo\":\"$NAME\",\"error\":\"workflow lookup failed\",\"detail\":$(jq -Rs . <"$WF_ERR")}"
+    rm -f "$WF_ERR"
+    continue
+  fi
+  rm -f "$WF_ERR"
 
-  RUNS_JSON=$(gh run list --repo "$NAME" --status failure --limit 100 \
+  RUN_ERR=$(mktemp)
+  if ! RUNS_JSON=$(GH_TOKEN="$TOKEN" gh run list --repo "$NAME" --status failure --limit 100 \
     --json databaseId,name,workflowName,workflowDatabaseId,createdAt,conclusion,event,headBranch,url \
-    --created ">$SINCE" 2>/dev/null || echo '[]')
+    --created ">$SINCE" 2>"$RUN_ERR"); then
+    echo "{\"repo\":\"$NAME\",\"error\":\"run lookup failed\",\"detail\":$(jq -Rs . <"$RUN_ERR")}"
+    rm -f "$RUN_ERR"
+    continue
+  fi
+  rm -f "$RUN_ERR"
 
   # Annotate each run with its workflow file basename, then filter out excludes.
   RUNS_JSON=$(echo "$RUNS_JSON" | jq --argjson map "$WF_MAP" --argjson excl "$EXCL_JSON" '

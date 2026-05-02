@@ -60,8 +60,11 @@ jobs:
         ---
         DATA_CONTEXT:
         ${{ needs.collect.outputs.context }}
-      # Render-only: data is preprocessed.
+      # Render-only: data is preprocessed by the collect job.
       max-turns: 20
       timeout-minutes: 15
-      extra-allowed-tools: "Bash(jq)"
+      # /daily-report parses DATA_CONTEXT with sed/jq, then upserts the
+      # evolveci/daily issue (date + gh issue list/create/edit). The harness
+      # already whitelists gh issue edit; add the rest explicitly.
+      extra-allowed-tools: "Bash(jq),Bash(sed),Bash(date),Bash(gh issue list),Bash(gh issue create)"
     secrets: inherit
