@@ -14,7 +14,7 @@ rules without spawning a job per failure.
 
 Usage:
     python3 scripts/build-triage-input.py \
-        --repos-file data/onboarded-repos.yml \
+        --config config.yml \
         --since 30m \
         --out triage-input.json
 
@@ -269,7 +269,7 @@ def fetch_failures(repo: str, since: dt.datetime, *,
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n", 1)[0])
-    ap.add_argument("--repos-file", default="data/onboarded-repos.yml")
+    ap.add_argument("--config", default="config.yml")
     ap.add_argument("--since", default="30m")
     ap.add_argument("--out", default="triage-input.json")
     ap.add_argument("--max-failures", type=int,
@@ -277,7 +277,7 @@ def main() -> int:
     args = ap.parse_args()
 
     since = parse_window(args.since)
-    repos = load_repos(Path(args.repos_file))
+    repos = load_repos(Path(args.config))
 
     patterns = load_patterns(
         os.environ.get("PATTERNS_SOURCE", "issues"),

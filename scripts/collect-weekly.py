@@ -71,7 +71,7 @@ def _percentile(values: list[float], q: float) -> float | None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n", 1)[0])
-    ap.add_argument("--repos-file", default="data/onboarded-repos.yml")
+    ap.add_argument("--config", default="config.yml")
     ap.add_argument("--out", default="weekly-stats.json")
     ap.add_argument("--dedup-repo", default=os.environ.get("GITHUB_REPOSITORY", ""))
     args = ap.parse_args()
@@ -81,7 +81,7 @@ def main() -> int:
     since_iso = since.strftime("%Y-%m-%dT%H:%M:%SZ")
     iso_year, iso_week, _ = until.isocalendar()
 
-    repos = load_repos(Path(args.repos_file))
+    repos = load_repos(Path(args.config))
     repo_names: list[str] = [r["name"] for r in repos]
     dedup_repo = args.dedup_repo or (repo_names[0] if repo_names else "")
 

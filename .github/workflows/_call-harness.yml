@@ -73,6 +73,7 @@ jobs:
       # vars.CLAUDE_MODEL overrides the literal default for repo / org-wide
       # rollout (e.g. switch the whole project to claude-sonnet-4-5 without
       # touching workflow files).
+      # model 默认值来自 config.yml → agent.model（通过 repo variable CLAUDE_MODEL 覆盖）
       model:               ${{ vars.CLAUDE_MODEL || 'glm-5.1' }}
       api-provider:        anthropic
       max-turns:           ${{ inputs.max-turns }}

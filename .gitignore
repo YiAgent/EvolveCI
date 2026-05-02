@@ -7,3 +7,4 @@ node_modules/
 
 # Stale Claude Code worktrees from prior agent sessions.
 .claude/worktrees/
+scripts/__pycache__/

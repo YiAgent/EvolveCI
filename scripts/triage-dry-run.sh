@@ -17,7 +17,7 @@
 set -euo pipefail
 
 WINDOW="${1:-24h}"
-REPOS_FILE="${REPOS_FILE:-data/onboarded-repos.yml}"
+REPOS_FILE="${REPOS_FILE:-config.yml}"
 
 if [ ! -f "$REPOS_FILE" ]; then
   echo "{\"error\":\"repos file not found\",\"path\":\"$REPOS_FILE\"}" >&2
