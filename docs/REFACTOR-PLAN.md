@@ -37,7 +37,7 @@
 
 ### 核心思想
 
-```
+```text
 当前（Agent-First）：
   Agent 做所有事：查数据 → 分析 → 决策 → 执行 → 写报告
   问题：turn 消耗高、不可靠、难 debug
@@ -75,15 +75,16 @@
 set -euo pipefail
 
 WINDOW="${1:-30m}"  # 默认查最近 30 分钟
-REPOS=$(yq '.repos[].name' data/onboarded-repos.yml | tr '\n' ',')
 
-# Step 1: 查询失败 runs
-RUNS=$(gh run list --repo "$repo" --status failure \
-  --created ">=${WINDOW}" --json databaseId,name,workflowName,createdAt \
-  --limit 10 2>/dev/null || echo "[]")
+# Step 1: 遍历每个监控仓库，查询失败 runs
+for repo in $(yq '.repos[].name' data/onboarded-repos.yml); do
+  RUNS=$(gh run list --repo "$repo" --status failure \
+    --created ">=${WINDOW}" --json databaseId,name,workflowName,createdAt \
+    --limit 10 2>/dev/null || echo "[]")
 
-# Step 2-6: 对每条失败做预处理
-# ...（详见下方完整实现）
+  # Step 2-6: 对每条失败做预处理
+  # ...（详见下方完整实现）
+done
 
 # Step 7: 输出 JSON
 cat /tmp/triage-context.json
@@ -250,7 +251,7 @@ jobs:
 
 **变更**：agent 不再自己查数据，只消费预处理好的 JSON。
 
-```markdown
+````markdown
 # /triage — 实时 CI 故障分诊
 
 **输入**：workflow 会注入 `DATA_CONTEXT` JSON（由 collect-triage-data.sh 生成）。
@@ -302,11 +303,11 @@ ACTIVE=$(echo "$BODY" | jq -r '.active // false')
 ### 步骤 5：输出总结
 
 打印本轮处理摘要（X 条失败，Y 条自动重跑，Z 条新建 issue）。
-```
+````
 
 ### 2.6 修改：`.claude/commands/daily-report.md`
 
-```markdown
+````markdown
 # /daily-report — 生成每日 CI 健康报告
 
 **输入**：workflow 会注入 `DATA_CONTEXT` JSON（由 collect-daily-data.sh 生成）。
@@ -361,7 +362,7 @@ fi
 ## 报告模板
 
 （保持现有模板不变，但数据来自 JSON 而非实时查询）
-```
+````
 
 ---
 
@@ -425,7 +426,7 @@ ${PATTERN_JSON}
 
 **新建 triage issue 时的 body 格式**：
 
-```markdown
+````markdown
 ## 🔴 CI 失败：{repo} / {workflow} / {step}
 
 **时间**：{timestamp} UTC
@@ -457,17 +458,22 @@ ${PATTERN_JSON}
 - tier2_match: {result}
 - tier3_analysis: {result}
 </details>
-```
+````
 
 ---
 
 ## 四、记忆模型清理
 
-### 4.1 删除废弃的 memory/ 目录
+### 4.1 保留 memory/ 仅作只读历史（不再使用）
+
+`memory/` 目录是 v3/v4 时代的遗留，所有持久化状态已迁移到带 `evolveci/*`
+标签的 GitHub Issues。**不删除**，仅保留为只读历史；任何代码、agent、CI 流程
+都不应再读取或写入它。
 
 ```bash
-# 在一个清理 PR 中删除
-git rm -r memory/
+# 不删除目录，仅禁止任何读写依赖。
+# 如需，可在 CI 中加 guard 检查：
+# rg -n "memory/" --glob '!docs/**' --glob '!CHANGELOG*' && exit 1
 ```
 
 ### 4.2 更新 CLAUDE.md
