@@ -155,3 +155,22 @@ prompts.
 | EvolveCI | #6  | route agent workflows via the refactored harness using GLM Coding Plan |
 | EvolveCI | #7  | grant the permissions the harness reusable workflow declares (actions:read, id-token:write, pull-requests:write) |
 | EvolveCI | #8  | raise daily/weekly turn budgets to 40/50; bump timeouts to 25/35 min |
+
+---
+
+## Phase 2 — Issues-as-memory rollout (2026-05-02 ~03:22 UTC)
+
+PR #10 (config unification) and PR #11 (memory→issues) both merged.
+
+### Op 15 — bootstrap labels
+
+`bash scripts/bootstrap-labels.sh YiAgent/EvolveCI` created the 14 baseline labels: 5 type labels (`evolveci/triage` etc.), 3 severity, 5 category, 1 status. fingerprint:* and repo:* labels are created on demand by triage.
+
+### Op 16 — dispatch all 4 workflows on memory-as-issues main
+
+- heartbeat: 25242583392
+- triage:    25242583918
+- daily:     25242584347
+- weekly:    25242584801
+
+Pending — waiting on background monitor.
