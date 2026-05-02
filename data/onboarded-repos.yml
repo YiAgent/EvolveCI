@@ -22,6 +22,8 @@ repos:
   - name: YiAgent/aicert
     workflows: "*"
     priority: high
-    # private repo — requires CROSS_REPO_PAT secret with `repo` scope
-    # (the default GITHUB_TOKEN cannot read actions for private cross-repo).
-    private: true
+    exclude:
+      - "agent-heartbeat.yml"
+      - "agent-triage.yml"
+      - "agent-daily.yml"
+      - "agent-weekly.yml"

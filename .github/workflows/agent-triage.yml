@@ -1,13 +1,8 @@
 # /triage — every 15 min, plus manual workflow_dispatch.
-#
-# Architecture (v5.1 agent-when-needed):
-#   1) collect: deterministic Python step queries gh, fingerprints, runs Tier
-#      1/2 classification, emits triage-input.json to $GITHUB_OUTPUT.
-#   2) triage:  the harness invokes the agent with that JSON injected into
-#      the prompt body as DATA_CONTEXT — agent does no data collection.
-#
-# Agent allow-list contains *no* python/pip — the install lives in the
-# collect job, which never touches the agent's runner.
+# Shared LLM/secret/wrapper boilerplate lives in _call-harness.yml.
+# permissions are scoped per-job (least privilege). The reusable-workflow
+# call needs a superset of _call-harness.yml; the data collector only needs
+# read access.
 name: "Agent — CI Triage"
 
 on:
@@ -24,54 +19,50 @@ concurrency:
   group: agent-triage
   cancel-in-progress: false
 
-permissions:
-  contents: write       # commit memory updates
-  issues: write         # triage issues
-  pull-requests: write  # sticky comments
-  actions: read         # CI MCP queries
-  id-token: write       # harden-runner
+permissions: {}
 
 jobs:
   collect:
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read   # checkout
+      actions: read    # gh run list
+      issues: read     # gh issue list (pattern / circuit)
     outputs:
-      context: ${{ steps.data.outputs.context }}
+      data_file: ${{ steps.data.outputs.data_file }}
+      summary: ${{ steps.data.outputs.summary }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install pyyaml
-        run: python3 -m pip install --quiet --user pyyaml
-
-      - id: data
-        name: Collect failures + Tier 1/2 classify
+      # Phase 1: 确定性数据收集（零 AI 成本，~30s）
+      # 脚本查询所有监控仓库的失败 runs，做 pattern 匹配和启发式分类，
+      # 输出结构化 JSON，agent 直接消费。
+      - name: Collect triage data
+        id: data
         env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_PAT || secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          PATTERNS_SOURCE: issues
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          python3 scripts/build-triage-input.py \
-            --since 30m --max-failures 10 \
-            --out /tmp/triage-input.json
-          {
-            echo "context<<TRIAGE_EOF"
-            cat /tmp/triage-input.json
-            echo "TRIAGE_EOF"
-          } >> "$GITHUB_OUTPUT"
+          bash scripts/collect-triage-data.sh 30m > /tmp/triage-context.json
+          # 传文件路径给 agent（context 只支持标量）
+          echo "data_file=/tmp/triage-context.json" >> "$GITHUB_OUTPUT"
+          # 同时注入 summary 标量用于 prompt 模板
+          jq -c '.summary' /tmp/triage-context.json >> /tmp/summary.json
+          echo "summary=$(cat /tmp/summary.json)" >> "$GITHUB_OUTPUT" 
 
   triage:
     needs: collect
+    permissions:
+      contents: write       # Claude commits memory updates back to main
+      issues: write         # triage issues
+      pull-requests: write  # sticky comments
+      actions: read         # CI MCP queries
+      id-token: write       # harden-runner
     uses: ./.github/workflows/_call-harness.yml
     with:
       task: triage
-      prompt: |-
-        ${{ inputs.prompt || '/triage' }}
-        ---
-        DATA_CONTEXT:
-        ${{ needs.collect.outputs.context }}
-      # Tier 3 path only — preprocessor handles everything else.
+      prompt-path: .claude/commands/triage.md
+      context: '{"data_file": "${{ needs.collect.outputs.data_file }}", "summary": "${{ needs.collect.outputs.summary }}"}'
       max-turns: 15
-      timeout-minutes: 15
-      # No python / pip needed — DATA_CONTEXT is already in the prompt.
-      extra-allowed-tools: "Bash(jq),Bash(bash lib/redact-log.sh)"
+      timeout-minutes: 10
+      extra-allowed-tools: "Bash(bash lib/redact-log.sh),Bash(bash lib/),Bash(cut),Bash(tr)"
     secrets: inherit

@@ -1,117 +1,65 @@
-# /daily-report — 24h CI 健康日报（v5.1 agent-when-needed）
+# /daily-report — 生成每日 CI 健康报告（基于预处理数据）
 
-**触发**：`agent-daily.yml` 工作日 UTC 01:00，或 `workflow_dispatch`。
+**触发方式**：由 `agent-daily.yml` 工作日 UTC 01:00 调用，或通过 `workflow_dispatch` 手动触发。
 
-> **数据已注入** — workflow 的 `collect:` job 已经跑过 `scripts/collect-daily.py`，
-> 把 24h 总览 + Top 失败 + Top-3 失败的日志 + 前一份 daily issue 通过 prompt 中
-> 的 `DATA_CONTEXT:` 段传给我。我不再自己查 gh / 算指标 — 我只负责把 JSON 渲
-> 染成中文 markdown，然后 upsert 到 `evolveci/daily` issue。
+> **v5.1 变更**：数据收集已由 `collect-daily-data.sh` 脚本完成（零 AI 成本），
+> agent 不再自己查询 CI 数据，只负责解读数据 + 写人类可读报告。
+> 预处理后的数据通过 `DATA_CONTEXT` JSON 注入。
 
-## ⚠️ 强制契约
+## ⚠️ 强制契约（不可违反）
 
-**每次运行必须以 `gh issue create` 或 `gh issue edit` 结束**。哪怕 `runs.total=0`，
-仍然写一条 `no_data: true` issue — 这是发现"agent 跑了但啥都没做"的唯一信号。
+**每次运行必须以 `gh issue create` 或 `gh issue edit` 结束**——即使 24 小时内
+没有任何数据可报告。这是任务的**成功条件**：没有 issue 写入 = 任务失败。
 
-## 步骤
+## 执行步骤
 
-### 1. 读取 DATA_CONTEXT
+### 步骤 1：读取预处理数据
 
-```bash
-sed -n '/^DATA_CONTEXT:/,$p' <<< "$PROMPT_BODY" | sed '1d' > /tmp/daily-stats.json
-```
-
-字段（节选）：
-
-- `totals.{runs,success,failure,cancelled,success_rate,flaky_rate}`
-- `top_failing_workflows[]` — Top 5 失败 workflow（含 repo / fails / last_failure）
-- `top3_failures_with_logs[]` — Top 3 最近失败，含 `failed_step` + `redacted_tail`
-- `triage.{new,open_old,patterns_added}` — 各自有 count + samples
-- `circuit.{active,tripped_at}`
-- `prev_daily` — 上一份 daily issue body（用于趋势对比）
-- `no_data` — 24h 内 0 run
-
-### 2. 检测退化（与上一份 daily 对比）
+读取预处理数据文件（路径：`{{data_file}}`）：
 
 ```bash
-PREV=$(jq -r '.prev_daily.body // empty' /tmp/daily-stats.json)
+CONTEXT=$(cat '{{data_file}}')
 ```
 
-如果有 PREV，从中抽出关键数字（成功率 / 失败数 / open triage），与今日对比，
-≥20% 劣化标 ⚠️。如无 PREV，跳过此步。
+`$CONTEXT` 是一个 JSON 对象，包含：
 
-### 3. 渲染 markdown
+`$CONTEXT` 是一个 JSON 对象，包含：
 
-#### 有数据时
+- `runs` — 统计：total, success, failure, cancelled, success_rate
+- `top_failures` — Top 5 失败 workflow（含 count、last_failure 时间）
+- `by_repo` — 按仓库统计
+- `by_workflow` — 按 workflow 统计（含 failure_rate）
+- `triage` — issue 统计：open, new_today, closed_today, new_issues[]
+- `patterns` — pattern 统计：total, new_today
+- `circuit` — 熔断器状态：active
+- `top3_failures_with_logs` — Top 3 失败的日志摘要（含 failed_step、log_tail）
+- `prev_daily` — 前一份 daily report 的 issue（用于对比退化）
 
-```markdown
-# Daily Report — {{today}}
+如果 `runs.total == 0`，使用本文件末尾的"无数据时"模板生成 `REPORT_BODY`，
+然后**仍然继续执行步骤 4（Upsert issue，必做）**——不可跳过。Slack 摘要
+（步骤 5）才是可选的。
 
-**生成时间**: {{generated_at}} UTC
-**监控仓库**: {{repos | length}} 个
+### 步骤 2：检测退化
 
-## 总览
+读取 `prev_daily` 中最近一份 report 的 body，提取关键指标：
+- 成功率变化 ≥20% → 标为退化
+- triage open 数量增长 ≥50% → 标为退化
 
-| 指标 | 今日 | 趋势 vs 昨日 |
-|------|------|-------------|
-| run 总数 | {{totals.runs}} | {{trend_runs}} |
-| 成功率 | {{success_rate_pct}}% | {{trend_success}} |
-| 失败数 | {{totals.failure}} | {{trend_failure}} |
-| flaky 率 | {{flaky_rate_pct}}% | — |
-| 仍 open 的 triage | {{triage.open_old.count + triage.new.count}} | — |
+如果没有 prev_daily，跳过此步。
 
-## Top 失败 Workflows
+### 步骤 3：生成报告
 
-（来自 `top_failing_workflows[]` — 5 行 list）
-- **{{repo}} · {{workflow}}** × {{fails}} 次
-- ...
+使用下方模板，填入 JSON 数据。特别注意：
+- `top_failures` → 写入"当日新增 triage"section
+- `top3_failures_with_logs` → 用 agent 推理能力为每条失败写一句摘要
+- `by_workflow` 中 failure_rate ≥ 50% 的 → 标红警告
 
-## 失败详情（Top 3）
-
-（来自 `top3_failures_with_logs[]`，对每条用 agent 推理写一句中文摘要）
-
-### {{repo}} · {{workflow}} · {{failed_step}}
-
-- Run: {{url}}
-- 失败摘要：{{我从 redacted_tail 推断的 1-2 句中文}}
-
-## 当日新增 triage
-
-（来自 `triage.new.samples`）
-- #{{number}} {{title}} (category: {{category}})
-
-（若无：`_当日无新增 triage issue。_`）
-
-## 仍 open 的 triage（昨日及之前）
-
-（来自 `triage.open_old.samples`）
-
-（若无：`_无超期 triage issue。_`）
-
-## 学习
-
-- 新增 `evolveci/pattern` × {{triage.patterns_added.count}}
-- 熔断器: active = {{circuit.active}}{{ if circuit.tripped_at }} (tripped at {{circuit.tripped_at}}){{ /if }}
-```
-
-#### `no_data=true` 时
-
-```markdown
-# Daily Report — {{today}}
-
-**生成时间**: {{generated_at}} UTC
-**no_data**: true
-
-过去 24 小时内没有任何 workflow run（已检查仓库 {{repos | join ", "}}）。可能原因：
-- 仓库当日静默（节假日 / 冻结）
-- onboarded-repos.yml 配置错误
-- API token 权限不足
-```
-
-### 4. Upsert issue
+### 步骤 4：Upsert issue（必做）
 
 ```bash
 TODAY=$(date -u +%Y-%m-%d)
 TITLE="Daily Report — ${TODAY}"
+
 EXISTING=$(gh issue list --label evolveci/daily \
             --search "in:title \"${TITLE}\"" -L 1 \
             --json number --jq '.[0].number // empty')
@@ -120,18 +68,76 @@ if [ -n "$EXISTING" ]; then
   gh issue edit "$EXISTING" --body "$REPORT_BODY"
 else
   gh issue create --title "$TITLE" \
-    --label "evolveci/daily,severity/info" \
-    --body "$REPORT_BODY"
+    --label "evolveci/daily,severity/info" --body "$REPORT_BODY"
 fi
 ```
 
-### 5. Slack（可选）
+### 步骤 5（可选）：Slack 摘要
 
-`success_rate < 70%` 或 `failure > 50` 或 `circuit.active = true` → 短摘要 +
-Issue URL 到 `SLACK_CI_WEBHOOK`。
+若有 ≥1 项关键指标恶化，向 `SLACK_WEBHOOK_URL` 发送一条短摘要 + Issue 链接。
 
-## 不做什么
+## 报告模板
 
-- 不调用 `python3 scripts/collect-daily.py` — 数据已经在 DATA_CONTEXT 里
-- 不写本地文件（`/tmp/*` 例外）
-- 不 git commit / push
+```markdown
+# Daily Report — {{date}}
+
+**生成时间**: {{generated_at}} UTC
+**监控仓库**: {{repos_count}} 个
+
+## 总览
+
+| 指标 | 今日 | 趋势 |
+|------|------|------|
+| run 总数 | {{total}} | — |
+| 成功率 | {{rate}}% | — |
+| 失败数 | {{failure}} | — |
+| 仍 open 的 triage | {{triage.open}} | — |
+| 今日新增 triage | {{triage.new_today}} | — |
+
+## Top 失败 Workflows
+
+{{#each top_failures}}
+- **{{workflow}}** ({{repo}}) — 失败 {{count}} 次，最近：{{last_failure}}
+{{/each}}
+
+（若无：`_过去 24 小时无失败。_`）
+
+## 失败详情（Top 3）
+
+{{#each top3_failures_with_logs}}
+### {{workflow}} — {{failed_step}}
+- **仓库**: {{repo}}
+- **Run ID**: {{run_id}}
+- **Agent 摘要**: {{一句人类可读的失败原因}}
+
+{{/each}}
+
+（若无：`_无失败需要分析。_`）
+
+## 按仓库统计
+
+| 仓库 | 总数 | 成功 | 失败 |
+|------|------|------|------|
+{{#each by_repo}}
+| {{repo}} | {{total}} | {{success}} | {{failure}} |
+{{/each}}
+
+## 学习
+
+- 已知 pattern 数：{{patterns.total}}
+- 今日新增 pattern：{{patterns.new_today}}
+- 熔断器状态：{{#if circuit.active}}🔴 已触发{{else}}✅ 正常{{/if}}
+```
+
+无数据时：
+
+```markdown
+# Daily Report — {{date}}
+
+**no_data**: true
+**生成时间**: {{generated_at}} UTC
+
+检查了仓库 {{repos_list}}，过去 24 小时内没有 workflow runs。可能原因：
+- 仓库配置有误（请检查 data/onboarded-repos.yml）
+- CI 在静默期（节假日、冻结）
+- API token 权限不足以读取 actions

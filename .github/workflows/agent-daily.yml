@@ -1,12 +1,8 @@
 # /daily-report — workdays at UTC 01:00.
-#
-# Architecture (v5.1 agent-when-needed):
-#   1) collect: Python collector aggregates 24h totals, top-failing workflows,
-#      triage / pattern / circuit signals, top-3 failures with logs, and the
-#      previous daily issue body (for trend comparison).
-#   2) daily:   harness invokes the agent with that JSON injected into the
-#      prompt as DATA_CONTEXT — agent only renders prose and upserts the
-#      daily issue.
+# Shared LLM/secret/wrapper boilerplate lives in _call-harness.yml.
+# permissions are scoped per-job (least privilege). The reusable-workflow
+# call needs a superset of _call-harness.yml; the data collector only needs
+# read access.
 name: "Agent — CI Daily Report"
 
 on:
@@ -18,53 +14,51 @@ concurrency:
   group: agent-daily
   cancel-in-progress: false
 
-permissions:
-  contents: write       # commit memory updates
-  issues: write         # triage issues
-  pull-requests: write  # sticky comments
-  actions: read         # CI MCP queries
-  id-token: write       # harden-runner
+permissions: {}
 
 jobs:
   collect:
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read   # checkout
+      actions: read    # gh run list
+      issues: read     # gh issue list (triage / pattern / circuit / daily)
     outputs:
-      context: ${{ steps.data.outputs.context }}
+      data_file: ${{ steps.data.outputs.data_file }}
+      runs: ${{ steps.data.outputs.runs }}
+      triage: ${{ steps.data.outputs.triage }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install pyyaml
-        run: python3 -m pip install --quiet --user pyyaml
-
-      - id: data
-        name: Aggregate 24h CI stats
+      # Phase 1: 聚合 24h CI 数据（零 AI 成本）
+      # 脚本查询所有仓库的 runs、计算指标、统计 issues，
+      # 输出结构化 JSON，agent 只负责写报告。
+      - name: Collect daily data
+        id: data
         env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_PAT || secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          python3 scripts/collect-daily.py --since 24h --out /tmp/daily-stats.json
-          {
-            echo "context<<DAILY_EOF"
-            cat /tmp/daily-stats.json
-            echo "DAILY_EOF"
-          } >> "$GITHUB_OUTPUT"
+          bash scripts/collect-daily-data.sh > /tmp/daily-context.json
+          echo "data_file=/tmp/daily-context.json" >> "$GITHUB_OUTPUT"
+          # 注入关键指标为标量
+          runs=$(jq -c '.runs' /tmp/daily-context.json)
+          triage=$(jq -c '.triage' /tmp/daily-context.json)
+          echo "runs=$runs" >> "$GITHUB_OUTPUT"
+          echo "triage=$triage" >> "$GITHUB_OUTPUT" 
 
   daily:
     needs: collect
+    permissions:
+      contents: write       # Claude commits memory updates back to main
+      issues: write         # triage issues
+      pull-requests: write  # sticky comments
+      actions: read         # CI MCP queries
+      id-token: write       # harden-runner
     uses: ./.github/workflows/_call-harness.yml
     with:
       task: daily-report
-      prompt: |-
-        /daily-report
-        ---
-        DATA_CONTEXT:
-        ${{ needs.collect.outputs.context }}
-      # Render-only: data is preprocessed by the collect job.
+      prompt-path: .claude/commands/daily-report.md
+      context: '{"data_file": "${{ needs.collect.outputs.data_file }}", "runs": "${{ needs.collect.outputs.runs }}", "triage": "${{ needs.collect.outputs.triage }}"}'
       max-turns: 20
-      timeout-minutes: 15
-      # /daily-report parses DATA_CONTEXT with sed/jq, then upserts the
-      # evolveci/daily issue (date + gh issue list/create/edit). The harness
-      # already whitelists gh issue edit; add the rest explicitly.
-      extra-allowed-tools: "Bash(jq),Bash(sed),Bash(date),Bash(gh issue list),Bash(gh issue create)"
+      timeout-minutes: 10
     secrets: inherit
