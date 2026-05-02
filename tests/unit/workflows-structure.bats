@@ -9,10 +9,12 @@ setup() {
 
 @test "all workflow files exist" {
   local workflows=(
-    "triage-failure.yml"
-    "health-ci-daily.yml"
-    "health-ci-weekly.yml"
-    "heartbeat.yml"
+    "agent-triage.yml"
+    "agent-daily.yml"
+    "agent-weekly.yml"
+    "agent-heartbeat.yml"
+    "_call-harness.yml"
+    "test.yml"
   )
 
   for wf in "${workflows[@]}"; do

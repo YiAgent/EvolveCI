@@ -128,13 +128,8 @@ EvolveCI/
 ├── .claude/commands/               Slash commands (Agent 技能)
 ├── .github/workflows/              cron 触发器 (4 个 agent + test)
 ├── .github/ISSUE_TEMPLATE/         结构化 issue 模板
-├── actions/observability/          composite actions
-│   ├── sources/                    数据收集 (query-github-actions)
-│   ├── analyzers/                  Tier1/Tier2 + 指标计算
-│   └── publishers/                 重跑 / 通知 / 熔断
+├── config.yml                      统一配置（repos + circuit + settings）
 ├── data/
-│   ├── onboarded-repos.yml         监控仓库列表
-│   ├── circuit-config.yml          熔断器配置
 │   └── known-patterns.seed.json    Tier 1 pattern 种子
 ├── prompts/observability/          AI 分析提示模板
 ├── lib/redact-log.sh               日志脱敏 (调用前必经)

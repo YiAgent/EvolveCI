@@ -59,8 +59,8 @@ elsewhere.
 | Workflow | Cron | Prompt | max-turns | timeout-min | Notes |
 |----------|------|--------|-----------|-------------|-------|
 | `agent-heartbeat.yml` | `0 */6 * * *` | `/heartbeat` | 15 | 10 | 5 health probes |
-| `agent-triage.yml` | `*/15 * * * *` | `/triage` | 15 | 15 | preprocessor (`scripts/build-triage-input.py`) does collection + Tier 1/2; agent only handles Tier 3 unknowns |
-| `agent-daily.yml` | `0 1 * * 1-5` | `/daily-report` | 20 | 20 | preprocessor (`scripts/collect-daily.py`) does aggregation; agent renders prose |
+| `agent-triage.yml` | `*/15 * * * *` | `/triage` | 15 | 15 | preprocessor (`scripts/collect-triage-data.sh`) does collection + Tier 1/2; agent only handles Tier 3 unknowns |
+| `agent-daily.yml` | `0 1 * * 1-5` | `/daily-report` | 20 | 20 | preprocessor (`scripts/collect-daily-data.sh`) does aggregation; agent renders prose |
 | `agent-weekly.yml` | `0 2 * * 1` | `/weekly-report` | 30 | 30 | preprocessor (`scripts/collect-weekly.py`) does DORA + MTTR; agent renders + opens PR |
 
 If a task starts hitting `Reached maximum number of turns`, raise its
