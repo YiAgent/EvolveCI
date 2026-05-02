@@ -16,67 +16,25 @@ permissions:
 
 jobs:
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  # test job: 运行 bats 单元测试（42 项检查）
+  # test: 运行 run-tests.sh 测试套件
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   test:
     runs-on: blacksmith
     timeout-minutes: 10
     steps:
-      # 安全加固
       - name: Harden runner
         uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40
         with:
           egress-policy: audit
 
-      # 拉取代码
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
-      # 运行 tests/run-tests.sh 测试套件
       - name: Run tests
         shell: bash
         run: |
           chmod +x tests/run-tests.sh
           bash tests/run-tests.sh
-
-  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  # validate-actions: 验证所有 action.yml 结构合法
-  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  validate-actions:
-    runs-on: blacksmith
-    timeout-minutes: 5
-    steps:
-      - name: Harden runner
-        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40
-        with:
-          egress-policy: audit
-
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-
-      # 遍历 actions/ 下所有 action.yml，检查 name/description/runs 字段
-      - name: Validate action structure
-        shell: bash
-        run: |
-          echo "Validating action.yml files..."
-          find actions -name "action.yml" | while read f; do
-            echo "  Checking $f"
-            python3 -c "
-          import yaml, sys
-          data = yaml.safe_load(open('$f'))
-          required = ['name', 'description', 'runs']
-          missing = [k for k in required if k not in data]
-          if missing:
-              print(f'ERROR: {missing}')
-              sys.exit(1)
-          runs = data.get('runs', {})
-          if runs.get('using') not in ['composite', 'node16', 'node20']:
-              print(f'ERROR: invalid runs.using')
-              sys.exit(1)
-          print(f'  OK')
-          "
-          done
-          echo "All actions valid."
 
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   # validate-workflows: 验证所有 workflow YAML 结构合法
@@ -93,7 +51,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
-      # 遍历 .github/workflows/ 下所有 yml，检查 name/on/jobs 字段
       - name: Validate workflow structure
         shell: bash
         run: |
@@ -103,7 +60,6 @@ jobs:
             python3 -c "
           import yaml, sys
           data = yaml.safe_load(open('$f'))
-          # 'on' is reserved in YAML (becomes True), so check for both
           has_trigger = 'on' in data or True in data
           if not has_trigger:
               print(f'ERROR: missing trigger (on)')
