@@ -1,13 +1,8 @@
 # /triage — every 15 min, plus manual workflow_dispatch.
-#
-# Architecture (v5.1 agent-when-needed):
-#   1) collect: deterministic Python step queries gh, fingerprints, runs Tier
-#      1/2 classification, emits triage-input.json to $GITHUB_OUTPUT.
-#   2) triage:  the harness invokes the agent with that JSON injected into
-#      the prompt body as DATA_CONTEXT — agent does no data collection.
-#
-# Agent allow-list contains *no* python/pip — the install lives in the
-# collect job, which never touches the agent's runner.
+# Shared LLM/secret/wrapper boilerplate lives in _call-harness.yml.
+# permissions MUST be declared here too (GitHub requires the calling job to
+# pre-grant a superset of what the called workflow requests; superset cannot
+# be inherited through workflow_call).
 name: "Agent — CI Triage"
 
 on:
@@ -33,31 +28,25 @@ permissions:
 
 jobs:
   collect:
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     outputs:
       context: ${{ steps.data.outputs.context }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install pyyaml
-        run: python3 -m pip install --quiet --user pyyaml
-
-      - id: data
-        name: Collect failures + Tier 1/2 classify
+      # Phase 1: 确定性数据收集（零 AI 成本，~30s）
+      # 脚本查询所有监控仓库的失败 runs，做 pattern 匹配和启发式分类，
+      # 输出结构化 JSON，agent 直接消费。
+      - name: Collect triage data
+        id: data
         env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_PAT || secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          PATTERNS_SOURCE: issues
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          python3 scripts/build-triage-input.py \
-            --since 30m --max-failures 10 \
-            --out /tmp/triage-input.json
-          {
-            echo "context<<TRIAGE_EOF"
-            cat /tmp/triage-input.json
-            echo "TRIAGE_EOF"
-          } >> "$GITHUB_OUTPUT"
+          bash scripts/collect-triage-data.sh 30m > /tmp/triage-context.json
+          # 注入为 step output（多行用 delimiter）
+          echo "context<<TRIAGE_EOF" >> "$GITHUB_OUTPUT"
+          cat /tmp/triage-context.json >> "$GITHUB_OUTPUT"
+          echo "TRIAGE_EOF" >> "$GITHUB_OUTPUT"
 
   triage:
     needs: collect
@@ -69,9 +58,7 @@ jobs:
         ---
         DATA_CONTEXT:
         ${{ needs.collect.outputs.context }}
-      # Tier 3 path only — preprocessor handles everything else.
       max-turns: 15
-      timeout-minutes: 15
-      # No python / pip needed — DATA_CONTEXT is already in the prompt.
-      extra-allowed-tools: "Bash(jq),Bash(bash lib/redact-log.sh)"
+      timeout-minutes: 10
+      extra-allowed-tools: "Bash(bash lib/redact-log.sh),Bash(bash lib/),Bash(cut),Bash(tr)"
     secrets: inherit

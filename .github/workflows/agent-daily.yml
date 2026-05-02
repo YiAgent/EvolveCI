@@ -1,12 +1,8 @@
 # /daily-report — workdays at UTC 01:00.
-#
-# Architecture (v5.1 agent-when-needed):
-#   1) collect: Python collector aggregates 24h totals, top-failing workflows,
-#      triage / pattern / circuit signals, top-3 failures with logs, and the
-#      previous daily issue body (for trend comparison).
-#   2) daily:   harness invokes the agent with that JSON injected into the
-#      prompt as DATA_CONTEXT — agent only renders prose and upserts the
-#      daily issue.
+# Shared LLM/secret/wrapper boilerplate lives in _call-harness.yml.
+# permissions MUST be declared here too (GitHub requires the calling job to
+# pre-grant a superset of what the called workflow requests; superset cannot
+# be inherited through workflow_call).
 name: "Agent — CI Daily Report"
 
 on:
@@ -27,28 +23,24 @@ permissions:
 
 jobs:
   collect:
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     outputs:
       context: ${{ steps.data.outputs.context }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install pyyaml
-        run: python3 -m pip install --quiet --user pyyaml
-
-      - id: data
-        name: Aggregate 24h CI stats
+      # Phase 1: 聚合 24h CI 数据（零 AI 成本）
+      # 脚本查询所有仓库的 runs、计算指标、统计 issues，
+      # 输出结构化 JSON，agent 只负责写报告。
+      - name: Collect daily data
+        id: data
         env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_PAT || secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          python3 scripts/collect-daily.py --since 24h --out /tmp/daily-stats.json
-          {
-            echo "context<<DAILY_EOF"
-            cat /tmp/daily-stats.json
-            echo "DAILY_EOF"
-          } >> "$GITHUB_OUTPUT"
+          bash scripts/collect-daily-data.sh > /tmp/daily-context.json
+          echo "context<<DAILY_EOF" >> "$GITHUB_OUTPUT"
+          cat /tmp/daily-context.json >> "$GITHUB_OUTPUT"
+          echo "DAILY_EOF" >> "$GITHUB_OUTPUT"
 
   daily:
     needs: collect
@@ -60,11 +52,6 @@ jobs:
         ---
         DATA_CONTEXT:
         ${{ needs.collect.outputs.context }}
-      # Render-only: data is preprocessed by the collect job.
       max-turns: 20
-      timeout-minutes: 15
-      # /daily-report parses DATA_CONTEXT with sed/jq, then upserts the
-      # evolveci/daily issue (date + gh issue list/create/edit). The harness
-      # already whitelists gh issue edit; add the rest explicitly.
-      extra-allowed-tools: "Bash(jq),Bash(sed),Bash(date),Bash(gh issue list),Bash(gh issue create)"
+      timeout-minutes: 10
     secrets: inherit
