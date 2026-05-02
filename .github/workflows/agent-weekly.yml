@@ -10,8 +10,11 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write   # Agent 将周报快照写入 memory/stats/weekly/，更新 CLAUDE.md
-  issues: write
+  contents: write       # Claude commits memory updates back to main
+  issues: write         # create / comment on triage issues
+  pull-requests: write  # sticky-comment dedup on PRs
+  actions: read         # query CI runs / job logs (mcp__github_ci__*)
+  id-token: write       # required by claude-code-action's harden-runner
 
 jobs:
   weekly-report:
