@@ -1,0 +1,100 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# EvolveCI — 统一配置
+# ═══════════════════════════════════════════════════════════════════════════════
+# 所有 workflow、scripts、agent 共用此文件。
+# 注意：cron 调度必须写在 workflow YAML 里（GitHub 限制），不能从这里读。
+# seed patterns 数据量大，单独放在 data/known-patterns.seed.json。
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── 监控仓库 ──────────────────────────────────────────────────────────────────
+repos:
+  - name: YiAgent/EvolveCI
+    workflows: "*"
+    priority: high
+    exclude:
+      - "agent-heartbeat.yml"
+      - "agent-triage.yml"
+      - "agent-daily.yml"
+      - "agent-weekly.yml"
+
+  - name: YiAgent/OpenCI
+    workflows: "*"
+    priority: high
+
+  - name: YiAgent/aicert
+    workflows: "*"
+    priority: high
+    exclude:
+      - "agent-heartbeat.yml"
+      - "agent-triage.yml"
+      - "agent-daily.yml"
+      - "agent-weekly.yml"
+
+# ── Agent 模型配置 ────────────────────────────────────────────────────────────
+agent:
+  model: "glm-5.1"
+  api_provider: "anthropic"
+  api_base_url: "https://open.bigmodel.cn/api/anthropic"
+  # secret 名称（在 GitHub repo settings 中配置实际值）
+  api_key_secret: "GLM_API_KEY"
+  base_url_secret: "GLM_BASE_URL"
+
+# ── Workflow 参数 ─────────────────────────────────────────────────────────────
+# 每个 workflow 的 turn 预算和超时。
+workflows:
+  triage:
+    max_turns: 15
+    timeout_minutes: 10
+    data_window: "30m"          # collect-triage-data.sh 查询窗口
+
+  heartbeat:
+    max_turns: 15
+    timeout_minutes: 10
+
+  daily:
+    max_turns: 20
+    timeout_minutes: 10
+
+  weekly:
+    max_turns: 30
+    timeout_minutes: 30
+
+# ── 熔断器 ────────────────────────────────────────────────────────────────────
+circuit:
+  dimensions:
+    workflow:
+      daily_limit: 3
+      description: "同一 workflow 同一仓库每日重跑上限"
+    pattern:
+      daily_limit: 5
+      description: "同一 pattern 跨所有仓库每日重跑上限"
+    repo:
+      daily_limit: 20
+      description: "单个仓库每日重跑总上限"
+
+  # 禁止自动重跑的 workflow 关键词
+  no_rerun_keywords:
+    - "deploy"
+    - "release"
+    - "security"
+    - "scan"
+    - "sign"
+    - "publish"
+
+# ── 通知 ──────────────────────────────────────────────────────────────────────
+notifications:
+  # Slack webhook（实际 URL 在 GitHub secrets 中配置）
+  slack_webhook_secret: "SLACK_CI_WEBHOOK"
+  # severity 达到什么级别才通知
+  notify_threshold: "warning"   # info | warning | critical
+
+# ── 数据收集 ──────────────────────────────────────────────────────────────────
+collect:
+  # 日志尾部保留行数（减少 token 消耗）
+  log_tail_lines: 50
+  # 每个仓库最多查询的失败 run 数
+  max_runs_per_repo: 20
+  # 日报查询窗口
+  daily_window: "24h"
+  # 周报查询窗口
+  weekly_window: "7d"

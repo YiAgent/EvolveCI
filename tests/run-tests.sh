@@ -186,27 +186,31 @@ test_data_files() {
   fi
 
   # Test onboarded-repos.yml
-  if [ -f "$data_dir/onboarded-repos.yml" ]; then
-    pass "onboarded-repos.yml exists"
-    if python3 -c "import yaml; yaml.safe_load(open('$data_dir/onboarded-repos.yml'))" 2>/dev/null; then
-      pass "onboarded-repos.yml is valid YAML"
+  if [ -f "$PROJECT_ROOT/config.yml" ]; then
+    pass "config.yml exists"
+    if python3 -c "import yaml; yaml.safe_load(open('$PROJECT_ROOT/config.yml'))" 2>/dev/null; then
+      pass "config.yml is valid YAML"
     else
-      fail "onboarded-repos.yml is not valid YAML"
+      fail "config.yml is not valid YAML"
     fi
   else
-    fail "onboarded-repos.yml not found"
+    fail "config.yml not found"
   fi
 
-  # Test circuit-config.yml
-  if [ -f "$data_dir/circuit-config.yml" ]; then
-    pass "circuit-config.yml exists"
-    if python3 -c "import yaml; yaml.safe_load(open('$data_dir/circuit-config.yml'))" 2>/dev/null; then
-      pass "circuit-config.yml is valid YAML"
+  # Test config.yml circuit section
+  if [ -f "$PROJECT_ROOT/config.yml" ]; then
+    if python3 -c "
+import yaml
+data = yaml.safe_load(open('$PROJECT_ROOT/config.yml'))
+assert 'circuit' in data, 'missing circuit section'
+assert 'dimensions' in data['circuit'], 'missing circuit.dimensions'
+" 2>/dev/null; then
+      pass "config.yml has circuit section"
     else
-      fail "circuit-config.yml is not valid YAML"
+      fail "config.yml missing or invalid circuit section"
     fi
   else
-    fail "circuit-config.yml not found"
+    fail "config.yml not found"
   fi
 }
 
@@ -356,10 +360,10 @@ test_agent_prompts() {
       /^```$/    { in_block=0; next }
       in_block   { print }
     ' "$cmd")
-    if echo "$bash_only" | grep -q 'DATA_CONTEXT'; then
-      pass "$base consumes DATA_CONTEXT"
+    if echo "$bash_only" | grep -q 'data_file\|DATA_CONTEXT'; then
+      pass "$base consumes pre-processed data"
     else
-      fail "$base does not parse DATA_CONTEXT (the workflow-injected JSON)"
+      fail "$base does not parse pre-processed data (data_file or DATA_CONTEXT)"
       violations=$((violations + 1))
     fi
   done

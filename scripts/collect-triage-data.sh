@@ -10,14 +10,14 @@
 #
 # 示例：
 #   bash scripts/collect-triage-data.sh 30m
-#   bash scripts/collect-triage-data.sh 1h data/onboarded-repos.yml
+#   bash scripts/collect-triage-data.sh 1h config.yml
 #
 # 输出：stdout（JSON），可重定向到 /tmp/triage-context.json
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
 WINDOW="${1:-30m}"
-REPOS_YML="${2:-data/onboarded-repos.yml}"
+CONFIG_FILE="${2:-config.yml}" 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 REDACT_SCRIPT="$REPO_ROOT/lib/redact-log.sh"
@@ -289,9 +289,11 @@ print(json.dumps([{'name': r['name'], 'exclude': r.get('exclude', [])} for r in 
         suggested_action="use_heuristic"
       fi
 
-      # 只保留日志最后 50 行（减少 token 消耗）
+      # 保留日志最后 N 行（从 config.yml 读取，默认 50）
+      local tail_lines
+      tail_lines=$(yq '.collect.log_tail_lines // 50' "$CONFIG_FILE" 2>/dev/null || echo 50)
       local log_tail
-      log_tail=$(echo "$log_redacted" | tail -50)
+      log_tail=$(echo "$log_redacted" | tail -"$tail_lines")
 
       # 构建 failure 对象
       local failure_obj

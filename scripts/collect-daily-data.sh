@@ -12,7 +12,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-REPOS_YML="${1:-data/onboarded-repos.yml}"
+CONFIG_FILE="${1:-config.yml}" 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -29,11 +29,11 @@ SINCE_48H=$(date -u -d '48 hours ago' +%FT%TZ 2>/dev/null || date -u -v-48H +%FT
 # ── 解析仓库列表 ──────────────────────────────────────────────────────────────
 
 repos=()
-if [ -f "$REPOS_YML" ]; then
+if [ -f "$CONFIG_FILE" ]; then
   while IFS= read -r repo; do
     repos+=("$repo")
-  done < <(yq '.repos[].name' "$REPOS_YML" 2>/dev/null || \
-           python3 -c "import yaml,sys; [print(r['name']) for r in yaml.safe_load(open('$REPOS_YML'))['repos']]" 2>/dev/null || \
+  done < <(yq '.repos[].name' "$CONFIG_FILE" 2>/dev/null || \
+           python3 -c "import yaml,sys; [print(r['name']) for r in yaml.safe_load(open('$CONFIG_FILE'))['repos']]" 2>/dev/null || \
            echo "")
 fi
 
@@ -54,7 +54,7 @@ for repo in "${repos[@]}"; do
 
   runs=$(gh run list --repo "$repo" --created ">=$SINCE_24H" \
     --json databaseId,name,workflowName,status,conclusion,createdAt,updatedAt,headBranch \
-    --limit 200 2>/dev/null || echo "[]")
+    --limit 200 2>/dev/null || echo "[]")  # TODO: read max from config.yml → collect.max_runs_per_repo
 
   # 排除 agent workflows
   runs=$(echo "$runs" | jq '[.[] | select(.workflowName | test("Agent —") | not)]')
