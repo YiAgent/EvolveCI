@@ -27,6 +27,8 @@ jobs:
     with:
       task: daily-report
       prompt: /daily-report
-      max-turns: 60
-      timeout-minutes: 30
+      # v5.1: collector script does aggregation; agent only renders prose.
+      max-turns: 20
+      timeout-minutes: 20
+      extra-allowed-tools: "Bash(python3 scripts/collect-daily.py),Bash(jq),Bash(pip install --user pyyaml),Bash(python3 -m pip install --user pyyaml)"
     secrets: inherit

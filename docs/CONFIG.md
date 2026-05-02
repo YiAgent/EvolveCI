@@ -59,9 +59,9 @@ elsewhere.
 | Workflow | Cron | Prompt | max-turns | timeout-min | Notes |
 |----------|------|--------|-----------|-------------|-------|
 | `agent-heartbeat.yml` | `0 */6 * * *` | `/heartbeat` | 15 | 10 | 5 health probes |
-| `agent-triage.yml` | `*/15 * * * *` | `/triage` | 30 | 20 | manual override via `workflow_dispatch.inputs.prompt`; extra allow-list for `bash lib/redact-log.sh` |
-| `agent-daily.yml` | `0 1 * * 1-5` | `/daily-report` | 40 | 25 | aggregate 24h CI data |
-| `agent-weekly.yml` | `0 2 * * 1` | `/weekly-report` | 50 | 35 | DORA + CLAUDE.md update |
+| `agent-triage.yml` | `*/15 * * * *` | `/triage` | 15 | 15 | preprocessor (`scripts/build-triage-input.py`) does collection + Tier 1/2; agent only handles Tier 3 unknowns |
+| `agent-daily.yml` | `0 1 * * 1-5` | `/daily-report` | 20 | 20 | preprocessor (`scripts/collect-daily.py`) does aggregation; agent renders prose |
+| `agent-weekly.yml` | `0 2 * * 1` | `/weekly-report` | 30 | 30 | preprocessor (`scripts/collect-weekly.py`) does DORA + MTTR; agent renders + opens PR |
 
 If a task starts hitting `Reached maximum number of turns`, raise its
 `max-turns` (and bump `timeout-minutes` proportionally) — they're the only

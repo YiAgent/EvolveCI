@@ -27,6 +27,7 @@ jobs:
     with:
       task: heartbeat
       prompt: /heartbeat
-      max-turns: 25
-      timeout-minutes: 15
+      # 5 small gh queries + 1 issue upsert; v5.1 budget.
+      max-turns: 15
+      timeout-minutes: 10
     secrets: inherit

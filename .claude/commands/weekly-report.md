@@ -1,133 +1,130 @@
-# /weekly-report — 每周深度复盘（提交 PR）
+# /weekly-report — 7d 深度复盘（提交 PR）
 
-**触发方式**：由 `agent-weekly.yml` 每周一 UTC 02:00 调用，或通过 `workflow_dispatch` 手动触发。
+**触发**：`agent-weekly.yml` 周一 UTC 02:00，或 `workflow_dispatch`。
 
-> 这是四个 agent 中**唯一**会动 git 的命令：它在新分支上更新 `CLAUDE.md`
-> 的"近期学习"章节，并打开一个 PR 等待 squash-merge。日报 / 心跳 / triage
-> 全部走 Issue。详见 `docs/MEMORY-MODEL.md`。
+> 这是四个 agent 中**唯一**会动 git 的命令：在新分支上更新 `CLAUDE.md` 的
+> "近期学习"章节，并打开 PR。
+>
+> 数据收集由 `scripts/collect-weekly.py` 一步完成；我（agent）只负责渲染
+> 中文 markdown 报告 + 决定 CLAUDE.md 学习行内容 + 调用 `weekly-pr.sh` 开 PR。
 
-## ⚠️ 强制契约（不可违反）
+## ⚠️ 强制契约
 
-**每次运行必须以 `gh pr create` 结束**——即使本周没有任何 incident 或新模式。
-这是任务的**成功条件**：没有 PR 提交 = 任务失败，即使所有命令都执行了。
+**每次运行必须以 `gh pr create` 结束**。哪怕本周零 incident，仍然开一个标注
+`no_data: true` 的 PR — 这是发现"agent 跑了但啥都没做"的唯一信号。
 
-如果完全没有数据：
-- 仍然创建 `weekly/<iso-week>` 分支并打开 PR
-- PR body 标注 "no_data: true" 并解释检查了哪些数据源
-- CLAUDE.md 的"近期学习"章节追加一行 `YYYY-MM-DD: _本周无新模式_`
+## 步骤
 
-只有这种"无声 PR"才会让我们及时发现"agent 跑了但啥也没做"的死循环。
+### 1. 预处理
 
-## 执行步骤
+```bash
+pip install --user --quiet pyyaml >/dev/null 2>&1 || python3 -m pip install --user --quiet pyyaml >/dev/null 2>&1
+python3 scripts/collect-weekly.py --out /tmp/weekly-stats.json
+```
 
-### 步骤 1：聚合 7 天数据
+### 2. 归档过期 incident
 
-- 列出最近一周更新过的 `evolveci/triage`（含已关闭）：
-  ```bash
-  SINCE=$(date -u -d '7 days ago' +%FT%TZ 2>/dev/null || date -u -v-7d +%FT%TZ)
-  gh issue list --label evolveci/triage --state all \
-    --search "updated:>${SINCE}" -L 100 \
-    --json number,title,labels,createdAt,closedAt,body
-  ```
+7 天前已 close、未 reopen 的 `evolveci/triage` issue → 加 `status/recovered` 标签：
 
-- 列出本周建立的 `evolveci/pattern`：
-  ```bash
-  gh issue list --label evolveci/pattern --state all \
-    --search "created:>${SINCE}" -L 100 --json number,title,body
-  ```
+```bash
+SINCE=$(date -u -d '7 days ago' +%FT%TZ 2>/dev/null || date -u -v-7d +%FT%TZ)
+gh issue list --label evolveci/triage --state closed \
+  --search "closed:<${SINCE} -label:status/recovered" \
+  --json number --jq '.[].number' | while read -r n; do
+    gh issue edit "$n" --add-label status/recovered
+  done
+```
 
-- 收集 7 个工作日的 `evolveci/daily` issue body，提取关键指标用于趋势分析。
+### 3. 渲染报告 markdown
 
-### 步骤 2：计算 DORA 指标
-
-- Deployment frequency：识别有 deploy/release 关键字的 workflow runs
-- Lead time for changes：commit → 成功 deploy 的中位数
-- Change failure rate：deploy run 中失败的比例
-- MTTR：`evolveci/triage` 从 created → closed 的中位数
-
-### 步骤 3：归档过期 incident
-
-把 7 天前已 close、未 reopen 的 `evolveci/triage` issue 加 `status/recovered`
-标签（如尚无），不再做任何编辑。
-
-### 步骤 4：生成报告 markdown
+读 `/tmp/weekly-stats.json`，套用模板：
 
 ```markdown
 # Weekly Deep Dive — {{iso_week}}
 
-**周期**: {{week_start}} → {{week_end}} UTC
-**监控仓库**: {{repos_list}}
+**周期**: {{since}} → {{until}} UTC
+**监控仓库**: {{repos | length}}
 
 ## 总览
 
-…（与上周对比）
+| 指标 | 本周 |
+|------|------|
+| run 总数 | {{totals.runs}} |
+| 成功率 | {{totals.success_rate * 100}}% |
+| flaky 率 | {{totals.flaky_rate * 100}}% |
 
 ## DORA
 
-| 指标 | 本周 | 上周 |
-| --- | --- | --- |
-| Deployment frequency | … | … |
-| Lead time | … | … |
-| CFR | … | … |
-| MTTR | … | … |
+| 指标 | 本周 |
+| --- | --- |
+| Deployment frequency | {{dora.deployment_frequency_per_day}} /day |
+| Change failure rate | {{dora.change_failure_rate}} |
+| MTTR (p50) | {{triage.mttr_hours_p50}} h |
+| MTTR (p95) | {{triage.mttr_hours_p95}} h |
+
+## 每日趋势
+
+（渲染 `by_day` 数组成迷你表格）
 
 ## 本周关键 incidents (Top 5)
 
-- #1234 …
+（来自 `triage.new.samples`，挑 severity/critical 优先）
 
-## 学习模式 (新增 evolveci/pattern)
+## 学习模式
 
-- #1456 …
+（来自 `triage.patterns_added.samples`）
 
 ## 行动建议
 
-…（agent 推理）
+（这是我推理的部分 — 1-3 句话）
 ```
 
-无数据时的 body：
+`no_data=true` 时的退化版本：
 
 ```markdown
 # Weekly Deep Dive — {{iso_week}}
 
 **no_data**: true
 
-本周（{{week_start}} → {{week_end}}）没有新增 incident、新模式或 daily-report。
-原因可能是：
-- agent 系统刚上线，尚未积累数据
+本周（{{since}} → {{until}}）零 workflow run。原因可能：
 - 监控仓库当周静默
 - 配置异常（请检查 data/onboarded-repos.yml）
 ```
 
-### 步骤 5：开 PR（不要直接 push 到 main，必做）
-
-把渲染好的 markdown 报告写入文件，把"近期学习"那一行准备好，调用辅助脚本：
+### 4. 决定 CLAUDE.md 学习行
 
 ```bash
-# 1. 写入报告 markdown
+# 有新 pattern → 取最值得记的那条；否则用占位
+PATTERN_COUNT=$(jq '.triage.patterns_added.count' /tmp/weekly-stats.json)
+TODAY=$(date -u +%Y-%m-%d)
+
+if [ "$PATTERN_COUNT" -gt 0 ]; then
+  TOP_PATTERN=$(jq -r '.triage.patterns_added.samples[0].title' /tmp/weekly-stats.json)
+  LEARNING="$TODAY: ${TOP_PATTERN#pattern: } — <一句话评价>"
+else
+  LEARNING="$TODAY: _本周无新模式_"
+fi
+```
+
+### 5. 开 PR
+
+```bash
 echo "$REPORT_MARKDOWN" > /tmp/weekly-report.md
 
-# 2. 准备 CLAUDE.md 的学习行（无新模式时用占位）
-LEARNING="$(date -u +%Y-%m-%d): <pattern-id> — <一句话>"
-# 或：
-# LEARNING="$(date -u +%Y-%m-%d): _本周无新模式_"
-
-# 3. 一行执行：分支创建 + CLAUDE.md 编辑 + commit + push + 开 PR
 bash scripts/weekly-pr.sh \
   --report-file /tmp/weekly-report.md \
   --learning-line "$LEARNING"
+# 输出: {"status":"ok","branch":"weekly/2026-W18","pr":"https://github.com/..."}
 ```
 
-脚本输出一行 JSON `{"status":"ok","branch":"...","pr":"...","week":"..."}`。
+PR 由人评审后 squash-merge。**不**自动 admin merge。
 
-PR 由人评审后 squash-merge。`/weekly-report` **不**自动 admin merge —
-留给 owner 决定是否信任后续轮次再切换为 `--auto`。
-
-## Slack 摘要（可选）
+## Slack（可选）
 
 发送本周 5 个关键数字 + PR URL 到 `SLACK_WEBHOOK_URL`。
 
 ## 不做什么
 
 - 不直接 push 到 main
-- 不 close 还在 open 的 `evolveci/triage`（除非 `status/recovered` 已经存在
-  且 ≥7 天没新动作）
+- 不 close 仍 open 的 `evolveci/triage`（除非 `status/recovered` 已存在 ≥7 天）
+- 不在 prompt 中再查 gh — 用 `/tmp/weekly-stats.json`

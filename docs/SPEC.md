@@ -1209,6 +1209,128 @@ repos:
 
 ---
 
+## 二十、确定性预处理 vs Agent 决策（v5.1 契约）
+
+> **添加于 v5.1 (2026-05)**。这一节是当前架构的核心约束。
+
+### 20.1 原则
+
+确定性的工作（查 gh、算 fingerprint、跑正则、计指标）由脚本/composite action
+完成；agent 只在脚本无法决断时介入。新分析逻辑**默认**进 `actions/observability/`
+或 `scripts/collect-*.py`，**不**进 `.claude/commands/*.md`。
+
+### 20.2 契约
+
+| 契约 | 强制 |
+|------|------|
+| 任何 `gh run list` 调用必须从 preprocessor 脚本发出 | ✅ |
+| `.claude/commands/*.md` 中的 `gh` 调用仅限 issue/label/PR 操作（不查 actions） | ✅ |
+| 新增 analyzer 必须先有 composite action 或 collector 脚本，再考虑 agent prompt 改动 | ✅ |
+| Tier 1 / Tier 2 不调用 LLM（零成本） | ✅ |
+| Tier 3 LLM 调用必须配 max-turns 上限（见 docs/CONFIG.md） | ✅ |
+
+### 20.3 JSON Schema：`triage-input.json`
+
+`scripts/build-triage-input.py` 输出，agent 在 `/triage` 中读取。
+
+```json
+{
+  "schema_version": 1,
+  "generated_at":   "<ISO8601>",
+  "since":          "<ISO8601>",
+  "repos_processed": {"<org/repo>": <int>},
+  "patterns_count":  <int>,
+  "entries": [
+    {
+      "run_id":         <int>,
+      "repo":           "<org/repo>",
+      "workflow_name":  "<string>",
+      "workflow_file":  "<basename or empty>",
+      "branch":         "<string>",
+      "event":          "<string>",
+      "url":            "<string>",
+      "created_at":     "<ISO8601>",
+      "failed_step":    "<job / step name>",
+      "redacted_tail":  "<last N lines, redacted>",
+      "fingerprint":    "<12hex>",
+      "existing_issue": <int|null>,
+      "tier1": {"matched": <bool>, "pattern_id"?, "category"?, "severity"?, "auto_rerun"?, "notify"?, "fix_hint"?},
+      "tier2": {"classified": <bool>, "category", "severity", "confidence", "auto_rerun", "notify"},
+      "needs_tier3":    <bool>
+    }
+  ]
+}
+```
+
+### 20.4 JSON Schema：`daily-stats.json`
+
+`scripts/collect-daily.py` 输出，agent 在 `/daily-report` 中读取。
+
+```json
+{
+  "schema_version": 1,
+  "generated_at":   "<ISO8601>",
+  "window":         "<window-spec>",
+  "since":          "<ISO8601>",
+  "repos":          ["<org/repo>"],
+  "totals": {
+    "runs": <int>, "success": <int>, "failure": <int>, "cancelled": <int>,
+    "success_rate": <float>, "flaky_rate": <float>
+  },
+  "top_failing_workflows": [{"repo", "workflow", "fails": <int>}],
+  "triage": {
+    "new":            {"count": <int>, "samples": [{"number","title","category"}]},
+    "open_old":       {"count": <int>, "samples": [...]},
+    "patterns_added": {"count": <int>, "samples": [...]}
+  },
+  "circuit": {"active": <bool>, "tripped_at": "<ISO8601|null>"},
+  "no_data": <bool>
+}
+```
+
+### 20.5 JSON Schema：`weekly-stats.json`
+
+`scripts/collect-weekly.py` 输出，agent 在 `/weekly-report` 中读取。
+`daily-stats.json` 字段全部存在；以下为额外字段：
+
+```json
+{
+  "iso_week": "YYYY-Www",
+  "until":    "<ISO8601>",
+  "by_day":   [{"date": "YYYY-MM-DD", "runs": <int>, "failures": <int>, "success": <int>}],
+  "triage": {
+    "new":              {...},
+    "closed":           {...},
+    "open_at_week_end": {...},
+    "patterns_added":   {...},
+    "mttr_hours_p50":   <float|null>,
+    "mttr_hours_p95":   <float|null>
+  },
+  "dora": {
+    "deployment_frequency_per_day": <float>,
+    "change_failure_rate":          <float|null>,
+    "mttr_hours":                   <float|null>
+  }
+}
+```
+
+### 20.6 Agent decision matrix（执行 `/triage` 时）
+
+| `existing_issue` | `tier1.matched` | `tier2.confidence` | 动作 |
+|---|---|---|---|
+| 非空 | — | — | 评论已有 issue，递增 occurrences |
+| null | true | — | 按 tier1 字段执行（无 LLM 调用）|
+| null | false | high | 按 tier2 字段执行（无 LLM 调用）|
+| null | false | medium / low | Tier 3 推理（这是唯一 LLM 触发点）|
+
+### 20.7 Lint
+
+`tests/agent-prompts.bats` 在 CI 中守护契约：在 `.claude/commands/*.md` 中
+出现 `gh run list` / `gh api repos/.*/actions` / `mcp__github_ci__*`
+即让 PR 失败（除被显式标注的 Tier 3 行外）。
+
+---
+
 ## 附录 A：术语表
 
 | 术语 | 含义 |

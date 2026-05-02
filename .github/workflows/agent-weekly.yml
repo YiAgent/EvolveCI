@@ -27,6 +27,9 @@ jobs:
     with:
       task: weekly-report
       prompt: /weekly-report
-      max-turns: 120
-      timeout-minutes: 70
+      # v5.1: collector script does aggregation + DORA + MTTR; agent only
+      # renders prose and opens the PR via weekly-pr.sh.
+      max-turns: 30
+      timeout-minutes: 30
+      extra-allowed-tools: "Bash(python3 scripts/collect-weekly.py),Bash(bash scripts/weekly-pr.sh),Bash(jq),Bash(pip install --user pyyaml),Bash(python3 -m pip install --user pyyaml)"
     secrets: inherit

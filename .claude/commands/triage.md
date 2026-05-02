@@ -1,156 +1,130 @@
-# /triage — 实时 CI 故障分诊（基于 Issue 内存模型）
+# /triage — 失败分诊（v5.1 agent-when-needed）
 
-**触发方式**：由 `agent-triage.yml` 每 15 分钟调用，或通过 `workflow_dispatch` 手动触发。
+**触发**：`agent-triage.yml` 每 15 分钟，或 `workflow_dispatch`。
 
-> 内存模型：fingerprints / 已知 patterns / 历史 incidents 都是带 `evolveci/*`
-> 标签的 GitHub Issue。详见 `docs/MEMORY-MODEL.md`。
+> 我（agent）**不直接** `gh run list` / 算 fingerprint / 读日志。
+> 这些都由 `scripts/build-triage-input.py` 一步做完，结果写入 JSON。
+> 我只负责：(a) 触发预处理，(b) 对 `needs_tier3=true` 的条目做推理，
+> (c) 把决策写成 `evolveci/triage` issue。
 
-## 执行步骤
+## 步骤
 
-### 步骤 1：检查熔断器
-
-读取唯一 `evolveci/circuit` Issue 的 body：
+### 1. 检查熔断器
 
 ```bash
 BODY=$(gh issue list --label evolveci/circuit --state all -L 1 \
         --json body --jq '.[0].body // empty')
-ACTIVE=$(echo "$BODY" | jq -r '.active // false')
-TRIPPED=$(echo "$BODY" | jq -r '.tripped_at // empty')
+ACTIVE=$(echo "$BODY" | jq -r '.active // false' 2>/dev/null || echo false)
+TRIPPED=$(echo "$BODY" | jq -r '.tripped_at // empty' 2>/dev/null || echo)
 ```
 
-- `active=true` 且距 `tripped_at` < 24h → 输出警告后退出，不执行任何动作。
-- `active=true` 且 ≥ 24h → 自动恢复（编辑 issue body 把 `active` 设为 `false`，
-  追加一条 `gh issue comment` 记录恢复时间），然后继续。
+- `active=true` 且距 `tripped_at` < 24h → **直接退出**，不预处理也不写 issue。
+- `active=true` 且 ≥24h → 编辑 issue body 设 `active=false`，加一条 comment 记录恢复时间，继续。
 
-### 步骤 2：加载上下文
+### 2. 预处理：收集 + Tier 1 + Tier 2
 
-- `data/onboarded-repos.yml` — 监控仓库列表（仍是文件）。
-- 已知 patterns：每个 pattern
-  issue 的 body 是 markdown，机器可读 JSON 嵌在末尾的 \`\`\`json 代码块里。
-  用 awk 提取：
-
-  ```bash
-  gh issue list --label evolveci/pattern --state all -L 100 \
-    --json body --jq '.[].body' | awk '
-      /^```json$/ { in_block=1; next }
-      /^```$/     { in_block=0; next }
-      in_block    { print }
-    ' > /tmp/patterns.jsonl
-  ```
-
-- 当日重跑计数器：放在内存（无需持久化文件）；超出预算时通过 step 4d 在
-  `evolveci/circuit` issue 上记录。
-
-### 步骤 3：查询失败
-
-对每个监控仓库通过 GitHub MCP 查询最近 30 分钟内 `failure` / `timed_out` 的
-workflow runs；合并所有仓库结果，按时间倒序排列，**最多取 10 条**处理。
-
-### 步骤 4：逐条分析
-
-对每条失败 run 依次执行：
-
-#### a. 获取日志
-
-通过 GitHub MCP 获取失败步骤的最后 100 行；用
-`echo "$LOG" | bash lib/redact-log.sh` 脱敏。
-
-#### b. 生成指纹
+执行：
 
 ```bash
-FP=$(printf '%s' "${ERROR_LINES}|${STEP_NAME}" | sha256sum | cut -c1-12)
+pip install --user --quiet pyyaml >/dev/null 2>&1 || python3 -m pip install --user --quiet pyyaml >/dev/null 2>&1
+python3 scripts/build-triage-input.py \
+  --since 30m \
+  --max-failures 10 \
+  --out /tmp/triage-input.json
 ```
 
-#### c. 去重检查（基于 issue 标签）
+读取结果：
 
 ```bash
-EXISTING=$(gh issue list --label "fingerprint:${FP}" --state open -L 1 \
-            --json number --jq '.[0].number // empty')
-
-if [ -n "$EXISTING" ]; then
-  # 在已有 issue 上累加
-  CURRENT=$(gh issue view "$EXISTING" --json body --jq .body)
-  N=$(echo "$CURRENT" | grep -oE '^occurrences: [0-9]+' | head -1 | awk '{print $2}')
-  N=$((${N:-1} + 1))
-  NEW_BODY=$(echo "$CURRENT" | sed "s/^occurrences: .*$/occurrences: $N/")
-  gh issue edit "$EXISTING" --body "$NEW_BODY"
-  gh issue comment "$EXISTING" --body "再次发生于 $(date -u +%FT%TZ) — [run]({{run_url}})"
-  # 跳到下一条 failure
-  continue
-fi
+ENTRIES=$(jq '.entries | length' /tmp/triage-input.json)
+T3=$(jq '[.entries[] | select(.needs_tier3)] | length' /tmp/triage-input.json)
+echo "preprocessor: $ENTRIES entries, $T3 need Tier 3"
 ```
 
-#### d. Tier 1 — 正则匹配
+如果 `ENTRIES=0` → 退出，没有失败需要处理。
 
-逐条用 `/tmp/patterns.jsonl` 的 `match` 字段对脱敏日志做正则匹配。
-命中 → 使用该 pattern 的 `auto_rerun` / `notify` / `severity` / `category`，
-记录 `pattern_id`，跳到步骤 5。
+### 3. 对每个条目执行决策
 
-#### e. Tier 2 — 启发式关键词
+```bash
+jq -c '.entries[]' /tmp/triage-input.json | while read -r e; do
+  # ... see decision matrix below ...
+done
+```
 
-按 `CLAUDE.md` 中"Tier 2 启发式规则"表格逐条匹配。
+对每条 entry，按下表决定动作：
 
-#### f. Tier 3 — 深度推理
+| `existing_issue` | `tier1.matched` | `tier2.confidence` | `needs_tier3` | 我的动作 |
+|---|---|---|---|---|
+| 非空 | — | — | false | **去重**：在 existing_issue 上 `gh issue comment` 累加，更新 body 里的 `occurrences:` |
+| null | true | — | false | **Tier 1 命中**：按 pattern 字段执行（auto_rerun / notify），创建 issue 引用 pattern_id |
+| null | false | high | false | **Tier 2 命中**：按 tier2 字段执行 |
+| null | false | low/medium | true | **Tier 3 推理**：以下我自己分析 |
 
-我用自己的推理能力分析脱敏日志（参考 `prompts/observability/classify-failure-sonnet.md`）。
-若发现可复用正则模式，调用 `/learn-pattern` 命令把它写入新的 `evolveci/pattern` Issue。
+#### Tier 1 / Tier 2 直通时的 issue 模板
 
-### 步骤 5：执行动作
+```bash
+REPO_LABEL="repo:$(echo "$REPO" | tr '/' '-')"
+gh label create "$REPO_LABEL"        --color ededed --description "Repo facet"      --force >/dev/null
+gh label create "fingerprint:$FP"    --color ededed --description "Fingerprint dedup" --force >/dev/null
 
-根据分类与置信度：
-
-- **flaky** → 自动重跑（受熔断器/预算约束），不建 Issue 通知。
-- **infra/code/dependency/unknown** → 在第 4c 步未命中已有 issue 时新建一条：
-
-  ```bash
-  REPO_LABEL="repo:$(echo "$REPO" | tr '/' '-')"
-  # 自动确保 repo: 标签存在（label create --force 是幂等的）
-  gh label create "$REPO_LABEL" --color "ededed" \
-    --description "Repo facet" --force >/dev/null
-
-  gh label create "fingerprint:${FP}" --color "ededed" \
-    --description "Fingerprint dedup" --force >/dev/null
-
-  gh issue create \
-    --title "${REPO} · ${WORKFLOW} · ${STEP} failure" \
-    --label "evolveci/triage,severity/${SEVERITY},category:${CATEGORY},${REPO_LABEL},fingerprint:${FP}" \
-    --body "$(cat <<EOF
-fingerprint: ${FP}
+gh issue create \
+  --title "$REPO · $WORKFLOW · $FAILED_STEP failure" \
+  --label "evolveci/triage,severity/$SEVERITY,category:$CATEGORY,$REPO_LABEL,fingerprint:$FP" \
+  --body "$(cat <<EOF
+fingerprint: $FP
 occurrences: 1
 last_seen: $(date -u +%FT%TZ)
-category: ${CATEGORY}
-severity: ${SEVERITY}
+category: $CATEGORY
+severity: $SEVERITY
 pattern_id: ${PATTERN_ID:-none}
-run: {{run_url}}
+run: $RUN_URL
 
 ## 摘要
 
-${SUMMARY}
-
-## 根因猜测
-
-${ROOT_CAUSE}
+${SUMMARY:-Tier 1/2 自动分类，详见 fix_hint.}
 
 ## 修复建议
 
-${FIX_SUGGESTION}
+${FIX_HINT:-参见对应 evolveci/pattern issue.}
 
 ## 脱敏日志摘要
 
 \`\`\`
-${REDACTED_TAIL}
+$REDACTED_TAIL
 \`\`\`
 EOF
 )"
-  ```
+```
 
-### 步骤 6：累计计数（可选 Slack）
+#### Tier 3 推理（仅 `needs_tier3=true` 时）
 
-`severity/critical` 或 `category:infra` 的告警建议同时发送 Slack 通知（如
-`SLACK_WEBHOOK_URL` 存在）。
+我读 `redacted_tail` 字段，分析：
+
+1. **类别** (flaky / infra / code / dependency / unknown) — 一句话理由
+2. **严重度** (info / warning / critical)
+3. **根因猜测** — 1-3 句
+4. **修复建议** — 可执行步骤
+5. （可选）**新 pattern** — 如果这个失败模式可能复现，调用 `/learn-pattern` 写入新的
+   `evolveci/pattern` issue。正则必须 ≤200 字符且无嵌套量词。
+
+输出格式见 `prompts/observability/classify-failure-sonnet.md`。然后用上面的 issue 模板写入。
+
+### 4. 重跑（可选）
+
+仅当 `auto_rerun=true` 且失败的 workflow 不含 `deploy/release/security/scan/sign/publish` 关键词，且当日预算未超 (`circuit-config.yml`)：
+
+```bash
+gh run rerun "$RUN_ID" --repo "$REPO" --failed
+```
+
+超预算 → 调用 `/check-circuit` 让它判断是否需要触发熔断器。
+
+### 5. Slack（可选）
+
+`severity/critical` 或 `category:infra` 且有 `SLACK_WEBHOOK_URL` → 发一条短摘要 + Issue URL。
 
 ## 不做什么
 
-- 不写本地文件
-- 不 git commit
-- 不 push 任何分支
+- 不写本地文件（`/tmp/triage-input.json` 例外，用完即弃）
+- 不 git commit / push
+- 不在 prompt 中再次调用 gh run list / 自己解日志 — 用 preprocessor 的输出

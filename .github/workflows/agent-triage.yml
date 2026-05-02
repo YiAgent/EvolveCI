@@ -1,8 +1,12 @@
 # /triage — every 15 min, plus manual workflow_dispatch.
+#
+# Architecture (v5.1 agent-when-needed):
+#   The agent's first step is `python3 scripts/build-triage-input.py` which
+#   does ALL data collection and Tier 1/2 classification deterministically.
+#   The agent then ingests the JSON output and only does Tier 3 reasoning on
+#   entries flagged needs_tier3=true. Saves ~80% of turns vs v5.0.
+#
 # Shared LLM/secret/wrapper boilerplate lives in _call-harness.yml.
-# permissions MUST be declared here too (GitHub requires the calling job to
-# pre-grant a superset of what the called workflow requests; superset cannot
-# be inherited through workflow_call).
 name: "Agent — CI Triage"
 
 on:
@@ -32,8 +36,8 @@ jobs:
     with:
       task: triage
       prompt: ${{ inputs.prompt || '/triage' }}
-      max-turns: 30
-      timeout-minutes: 20
-      # Triage runs the log-redaction shell script on raw CI logs.
-      extra-allowed-tools: "Bash(bash lib/redact-log.sh),Bash(bash lib/),Bash(cut),Bash(tr)"
+      # Tier 3 path only — preprocessor handles everything else.
+      max-turns: 15
+      timeout-minutes: 15
+      extra-allowed-tools: "Bash(python3 scripts/build-triage-input.py),Bash(jq),Bash(bash lib/redact-log.sh),Bash(bash lib/),Bash(cut),Bash(tr),Bash(pip install --user pyyaml),Bash(python3 -m pip install --user pyyaml)"
     secrets: inherit

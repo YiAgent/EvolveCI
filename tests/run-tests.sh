@@ -264,7 +264,7 @@ test_agent_memory() {
   # CLAUDE.md
   if [ -f "$PROJECT_ROOT/CLAUDE.md" ]; then
     pass "CLAUDE.md exists"
-    if grep -q "被触发时的默认行为" "$PROJECT_ROOT/CLAUDE.md"; then
+    if grep -qE "触发即任务|被触发时的默认行为" "$PROJECT_ROOT/CLAUDE.md"; then
       pass "CLAUDE.md has default behavior section"
     else
       fail "CLAUDE.md missing default behavior section"
@@ -313,6 +313,53 @@ echo "=========================================="
 echo "  EvolveCI Test Suite"
 echo "=========================================="
 
+test_agent_prompts() {
+  echo ""
+  echo "=== Testing v5.1 Agent-When-Needed Contract ==="
+
+  local commands_dir="$PROJECT_ROOT/.claude/commands"
+  local violations=0
+
+  # Forbidden bash patterns inside ```bash fenced blocks of slash commands.
+  for cmd in "$commands_dir"/*.md; do
+    local bash_only
+    bash_only=$(awk '
+      /^```bash$/ { in_block=1; next }
+      /^```$/    { in_block=0; next }
+      in_block   { print }
+    ' "$cmd")
+    [ -z "$bash_only" ] && continue
+    for pat in "gh run list" "gh api repos/[^[:space:]]+/actions" "mcp__github_ci__"; do
+      if echo "$bash_only" | grep -qE "$pat"; then
+        fail "$(basename "$cmd"): forbidden bash pattern '$pat'"
+        violations=$((violations + 1))
+      fi
+    done
+  done
+
+  # Every non-exempt command must invoke a v5.1 collector script.
+  local exempt=("check-circuit.md" "learn-pattern.md" "heartbeat.md")
+  for cmd in "$commands_dir"/*.md; do
+    local base
+    base=$(basename "$cmd")
+    local skip=false
+    for ex in "${exempt[@]}"; do
+      [ "$base" = "$ex" ] && skip=true && break
+    done
+    $skip && continue
+    if grep -qE 'scripts/(build-triage-input|collect-daily|collect-weekly)\.py' "$cmd"; then
+      pass "$base invokes a v5.1 collector"
+    else
+      fail "$base does not invoke any v5.1 collector script"
+      violations=$((violations + 1))
+    fi
+  done
+
+  if [ "$violations" -eq 0 ]; then
+    pass "v5.1 agent-when-needed contract holds"
+  fi
+}
+
 test_redact_log
 test_action_structure
 test_workflow_structure
@@ -320,6 +367,7 @@ test_data_files
 test_manifest
 test_prompts
 test_agent_memory
+test_agent_prompts
 
 # Summary
 echo ""
