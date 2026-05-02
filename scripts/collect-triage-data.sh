@@ -49,29 +49,39 @@ fingerprint() {
   printf '%s|%s' "$error_lines" "$step_name" | sha256sum | cut -c1-12
 }
 
-# 脱敏日志
+# 脱敏日志（fail-closed：缺失脱敏脚本时直接退出，避免明文日志外流）
 redact() {
-  if [ -f "$REDACT_SCRIPT" ]; then
-    bash "$REDACT_SCRIPT"
-  else
-    cat  # fallback: 不脱敏
+  if [[ ! -f "$REDACT_SCRIPT" ]]; then
+    err "Missing redact script: $REDACT_SCRIPT (refusing to pass raw logs downstream)"
+    exit 1
   fi
+  bash "$REDACT_SCRIPT"
 }
 
 # ── 加载已知 patterns ─────────────────────────────────────────────────────────
 
 load_patterns() {
-  # 优先从 evolveci/pattern issues 加载（最新数据）
+  : > "$PATTERNS_CACHE"
+
+  # 优先从 evolveci/pattern issues 加载（最新数据）。
+  # body 可能是纯 JSON，也可能是 markdown 包裹的 ```json fenced block；
+  # 我们先尝试提取 fenced block，否则把整个 body 当 JSON 解析，
+  # 都失败则跳过。这样可以正确处理含 `{...}` 嵌套的 regex。
   if command -v gh &>/dev/null; then
-    gh issue list --label evolveci/pattern --state all -L 100 \
-      --json body --jq '.[].body' 2>/dev/null | while IFS= read -r body; do
-        # 尝试解析为 JSON（body 可能包含 markdown + JSON）
-        echo "$body" | grep -oE '\{[^}]+\}' | head -1
-      done > "$PATTERNS_CACHE" 2>/dev/null || true
+    while IFS= read -r body; do
+      [[ -z "$body" ]] && continue
+      {
+        printf '%s\n' "$body" \
+          | awk '/^```json[[:space:]]*$/{flag=1;next} /^```[[:space:]]*$/{flag=0} flag' \
+          | jq -c . 2>/dev/null \
+          || printf '%s\n' "$body" | jq -c . 2>/dev/null
+      } >> "$PATTERNS_CACHE" || true
+    done < <(gh issue list --label evolveci/pattern --state all -L 100 \
+              --json body --jq '.[].body' 2>/dev/null)
   fi
 
   # Fallback：从 seed 文件加载
-  if [ ! -s "$PATTERNS_CACHE" ] && [ -f "$REPO_ROOT/data/known-patterns.seed.json" ]; then
+  if [[ ! -s "$PATTERNS_CACHE" ]] && [[ -f "$REPO_ROOT/data/known-patterns.seed.json" ]]; then
     jq -c '.[]' "$REPO_ROOT/data/known-patterns.seed.json" > "$PATTERNS_CACHE" 2>/dev/null || true
   fi
 }
@@ -79,7 +89,7 @@ load_patterns() {
 # Tier 1: 正则匹配已知 patterns
 match_pattern() {
   local log="$1"
-  if [ ! -s "$PATTERNS_CACHE" ]; then
+  if [[ ! -s "$PATTERNS_CACHE" ]]; then
     echo "null"
     return
   fi
@@ -93,7 +103,7 @@ match_pattern() {
     auto_rerun=$(echo "$pattern_json" | jq -r '.auto_rerun // false')
     notify=$(echo "$pattern_json" | jq -r '.notify // false')
 
-    if [ -n "$match_re" ] && echo "$log" | grep -qE "$match_re" 2>/dev/null; then
+    if [[ -n "$match_re" ]] && echo "$log" | grep -qE "$match_re" 2>/dev/null; then
       jq -nc \
         --arg id "$id" \
         --arg category "$category" \
@@ -157,22 +167,28 @@ main() {
   # 加载 patterns
   load_patterns
   local pattern_count=0
-  if [ -s "$PATTERNS_CACHE" ]; then
+  if [[ -s "$PATTERNS_CACHE" ]]; then
     pattern_count=$(wc -l < "$PATTERNS_CACHE")
   fi
   log "Loaded $pattern_count known patterns"
 
-  # 解析仓库列表
-  local repos=()
-  if [ -f "$REPOS_YML" ]; then
-    while IFS= read -r repo; do
-      repos+=("$repo")
-    done < <(yq '.repos[].name' "$REPOS_YML" 2>/dev/null || \
-             python3 -c "import yaml,sys; [print(r['name']) for r in yaml.safe_load(open('$REPOS_YML'))['repos']]" 2>/dev/null || \
-             echo "")
+  # 解析仓库列表 + per-repo `exclude` 配置
+  # 输出 JSON 数组：[{"name":"...", "exclude":["a.yml","b.yml"]}, ...]
+  local repos_config="[]"
+  if [[ -f "$REPOS_YML" ]]; then
+    repos_config=$(yq -o=json '[.repos[] | {name: .name, exclude: (.exclude // [])}]' "$REPOS_YML" 2>/dev/null \
+      || python3 -c "import yaml,json,sys
+data = yaml.safe_load(open('$REPOS_YML'))
+print(json.dumps([{'name': r['name'], 'exclude': r.get('exclude', [])} for r in data['repos']]))" 2>/dev/null \
+      || echo "[]")
   fi
 
-  if [ ${#repos[@]} -eq 0 ]; then
+  local repos=()
+  while IFS= read -r repo; do
+    [[ -n "$repo" ]] && repos+=("$repo")
+  done < <(echo "$repos_config" | jq -r '.[].name')
+
+  if [[ ${#repos[@]} -eq 0 ]]; then
     warn "No repos found in $REPOS_YML"
     echo '{"failures":[],"summary":{"total_failures":0,"error":"no repos configured"}}'
     return
@@ -185,13 +201,13 @@ main() {
   local total_runs=0 total_failures=0
 
   for repo in "${repos[@]}"; do
-    [ -z "$repo" ] && continue
+    [[ -z "$repo" ]] && continue
     log "Querying $repo..."
 
     # 查询失败 runs
     local runs_json
     runs_json=$(gh run list --repo "$repo" --status failure \
-      --created ">=$since" --json databaseId,name,workflowName,conclusion,createdAt,updatedAt,headBranch \
+      --created ">=$since" --json databaseId,name,workflowName,workflowDatabaseId,conclusion,createdAt,updatedAt,headBranch \
       --limit 20 2>/dev/null || echo "[]")
 
     local run_count
@@ -199,8 +215,24 @@ main() {
     total_runs=$((total_runs + run_count))
     log "  Found $run_count failed runs in $repo"
 
-    # 排除 agent 自身的 workflows（避免自循环）
-    runs_json=$(echo "$runs_json" | jq '[.[] | select(.workflowName | test("Agent —") | not)]')
+    # 取该 repo 的 exclude 文件名列表（来自 onboarded-repos.yml）
+    local repo_excludes
+    repo_excludes=$(echo "$repos_config" | jq -c --arg n "$repo" '[.[] | select(.name == $n) | .exclude // []] | first // []')
+
+    # 解析为 workflowDatabaseId 集合：拉取该 repo 的 workflow 列表，
+    # 取 path basename 与 exclude 列表匹配的 workflow id。
+    local excluded_ids="[]"
+    if [[ "$(echo "$repo_excludes" | jq 'length')" -gt 0 ]]; then
+      local wf_list
+      wf_list=$(gh workflow list --repo "$repo" --all --json id,name,path --limit 100 2>/dev/null || echo "[]")
+      excluded_ids=$(echo "$wf_list" | jq --argjson ex "$repo_excludes" \
+        '[.[] | select((.path | split("/") | last) as $base | $ex | index($base)) | .id]')
+    fi
+
+    # 应用 per-repo exclude（按 workflowDatabaseId）+ 兜底排除 agent 自身 workflows（按显示名）
+    runs_json=$(echo "$runs_json" | jq --argjson ex "$excluded_ids" \
+      '[.[] | select((.workflowDatabaseId as $id | $ex | index($id)) | not)
+            | select(.workflowName | test("Agent —") | not)]')
     run_count=$(echo "$runs_json" | jq length)
 
     # 对每条失败获取日志
@@ -225,10 +257,16 @@ main() {
       local fp
       fp=$(fingerprint "$log_redacted" "$failed_step")
 
-      # 检查是否已有对应 issue
+      # 检查是否已有对应 issue（evolveci/* 状态都存在 controller repo 而非 failing repo）
+      local state_repo="${GITHUB_REPOSITORY:-}"
       local existing_issue=""
-      existing_issue=$(gh issue list --repo "$repo" --label "fingerprint:${fp}" --state open -L 1 \
-        --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+      if [[ -n "$state_repo" ]]; then
+        existing_issue=$(gh issue list --repo "$state_repo" --label "fingerprint:${fp}" --state open -L 1 \
+          --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+      else
+        existing_issue=$(gh issue list --label "fingerprint:${fp}" --state open -L 1 \
+          --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+      fi
 
       # Tier 1: pattern 匹配
       local tier1_result
@@ -244,10 +282,10 @@ main() {
       local tier2_confidence=""
       tier2_confidence=$(echo "$tier2_result" | jq -r '.confidence // "low"')
 
-      if [ "$tier1_result" != "null" ]; then
+      if [[ "$tier1_result" != "null" ]]; then
         suggested_action="use_pattern"
         tier1_matched=true
-      elif [ "$tier2_confidence" = "high" ]; then
+      elif [[ "$tier2_confidence" == "high" ]]; then
         suggested_action="use_heuristic"
       fi
 

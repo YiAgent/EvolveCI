@@ -156,7 +156,12 @@ for i in $(seq 0 $(($(echo "$top3_runs" | jq length) - 1))); do
   run_id=$(echo "$top3_runs" | jq -r ".[$i].databaseId")
   repo=$(echo "$top3_runs" | jq -r ".[$i].repo")
 
-  log_tail=$(gh run view "$run_id" --repo "$repo" --log-failed 2>/dev/null | tail -20 || echo "（无法获取日志）")
+  log_tail=$(
+    gh run view "$run_id" --repo "$repo" --log-failed 2>/dev/null \
+      | bash "$REPO_ROOT/lib/redact-log.sh" \
+      | tail -20 \
+      || echo "（无法获取日志）"
+  )
   failed_step=$(gh run view "$run_id" --repo "$repo" --json jobs \
     --jq '.jobs[] | select(.conclusion == "failure") | .steps[] | select(.conclusion == "failure") | .name' 2>/dev/null | head -1 || echo "unknown")
 
