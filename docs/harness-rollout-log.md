@@ -174,3 +174,91 @@ PR #10 (config unification) and PR #11 (memory→issues) both merged.
 - weekly:    25242584801
 
 Pending — waiting on background monitor.
+
+---
+
+## Phase 3 — Issues actually getting upserted (2026-05-02 03:30 UTC →)
+
+### Op 17 — heartbeat #16 created with 5-probe results
+
+Run 25242859652 (post PR #14 onboarding real repos) created EvolveCI's first
+real heartbeat alert. Probes 1+2 critical-failed (zero triage activity, zero
+patterns), probe 4 was first to read the (missing) circuit issue and
+auto-created #15 with `{"active":false,"history":[]}`. Issue #16 body is the
+canonical 5-probe report shape.
+
+### Op 18 — daily/weekly/heartbeat still running but not WRITING
+
+Several rounds of "ran successfully, didn't update issues". Diagnosis:
+the agent reads the bash code blocks in slash commands as illustrative
+documentation, not as scripts to execute. Two interventions:
+
+- **PR #17**: add 强制契约 ("mandatory contract") sections to daily and
+  weekly making it explicit that `gh issue create/edit` and `gh pr create`
+  are the success conditions, not just suggestions.
+- **PR #28**: extract heartbeat probe-2 self-heal into a real shell script
+  `scripts/seed-patterns.sh`. Pre-merge bootstrap created the 10 pattern
+  issues (#18–#27) by running the script locally.
+- **PR #29**: bump daily max-turns 40→60 — imperative contract makes it do
+  more work per run.
+- **PR #30**: heartbeat 强制契约 + scripts/weekly-pr.sh helper (cuts ~10
+  turns of git fiddling into one bash call) + weekly max-turns 80→120.
+
+### Op 19 — Daily #31 ✅ created with real CI data (2026-05-02 04:11 UTC)
+
+Run 25243281059 (post PR #29) finally produced the artifact:
+- Title: "Daily Report — 2026-05-02"
+- Body: 200 runs across 2 monitored repos, 47.4% success rate, top-5
+  failing workflows including OpenCI/issue-comment 15/15 (100% failure),
+  OpenCI/pr 12/12 (100%).
+- The agent did the upsert correctly with the new imperative prompt.
+
+End-state of the issue store at this checkpoint:
+
+| Label | Count | Notes |
+|-------|------:|-------|
+| `evolveci/heartbeat` | 1 (#16) | Open, awaiting new probe-comment |
+| `evolveci/triage` | 0 | No failures intercepted yet |
+| `evolveci/daily` | 1 (#31) | Today's report |
+| `evolveci/pattern` | 10 (#18-#27) | Seeded from data/known-patterns.seed.json |
+| `evolveci/circuit` | 1 (#15) | Default state, active=false |
+
+### Op 20 — heartbeat 25243424570 + weekly 25243425053 in flight (post PR #30)
+
+Awaiting bg monitor bxdgf1nfv. Expected outcomes:
+- heartbeat: comment on #16 with new probe results (probe 2 should now
+  pass — 10 patterns exist), or close it if all 5 probes pass.
+- weekly: open `weekly/2026-W18 deep dive` PR via the new helper script.
+
+### Op 21 — Weekly run 25243425053 + manual PR salvage
+
+After PR #30 merged (heartbeat 强制契约 + scripts/weekly-pr.sh helper +
+max-turns 120), weekly ran 114 turns at $2.05 cost and produced
+substantial artifacts on the `weekly/2026-W18` branch:
+
+- `weekly-report.md` (64 lines) with real CI data: EvolveCI Tests 95.3%
+  success, OpenCI critical config failures, agent success rates.
+- 4 progressive commits refining the report.
+- A duplicate "近期学习" line fix in CLAUDE.md.
+
+But the agent stopped one step short of `gh pr create` — exit subtype
+was "success" so it thought it was done after pushing the branch.
+
+**Salvaged manually**: opened https://github.com/YiAgent/EvolveCI/pull/33
+with the agent's `weekly-report.md` as the body. Future weekly runs
+should be able to complete autonomously now that the agent has worked
+through the path once.
+
+### Op 22 — End-to-end complete 🎉
+
+| Path | Status | Artifact |
+|------|--------|----------|
+| `/heartbeat` | ✅ closed #16 (PR #30 contract worked) | `evolveci/heartbeat` issue lifecycle |
+| `/triage` | ✅ correctly no-op'd (no failures = no issues) | (none expected) |
+| `/daily-report` | ✅ #31 created with 200 runs, 47.4% success | `evolveci/daily` issue |
+| `/weekly-report` | ✅ branch+report ready, PR #33 opened (manual salvage) | `weekly: 2026-W18 deep dive` PR |
+
+Pattern catalogue: 10 issues #18–#27 (re-rendered to bilingual format
+in PR #32). Circuit breaker: #15. Total agent commits to git this
+session: ZERO outside the weekly branch (which is the entire point of
+the memory-as-issues redesign).
