@@ -16,7 +16,17 @@
       "Bash(gh run *)",
       "Bash(python3 *)",
       "Bash(read f *)",
-      "Bash(gh workflow *)"
+      "Bash(gh workflow *)",
+      "Bash(gh issue *)",
+      "Bash(gh pr create)",
+      "Bash(gh auth *)",
+      "Bash(gh repo *)",
+      "Bash(git config *)",
+      "Bash(git fetch *)",
+      "Bash(git switch *)",
+      "Bash(git checkout *)",
+      "Bash(bash scripts/*)",
+      "Bash(date *)"
     ]
   }
 }

@@ -5,6 +5,9 @@
 > **v5.1 变更**：数据收集已由 `collect-triage-data.sh` 脚本完成（零 AI 成本），
 > agent 不再自己查询 CI 数据，只做决策和执行。预处理后的数据通过
 > `DATA_CONTEXT` JSON 注入。
+>
+> 内存模型：fingerprints / 已知 patterns / 历史 incidents 都是带 `evolveci/*`
+> 标签的 GitHub Issue。详见 `docs/MEMORY-MODEL.md`。
 
 ## 执行步骤
 
@@ -117,39 +120,14 @@ last_seen: $(date -u +%FT%TZ)"
 gh run rerun "$RUN_ID" --repo "$REPO" --failed
 ```
 
-### 步骤 7：输出总结
-
-打印本轮摘要：X 条失败处理，Y 条自动重跑，Z 条新建 issue，W 条更新已有 issue。
-category: ${CATEGORY}
-severity: ${SEVERITY}
-pattern_id: ${PATTERN_ID:-none}
-run: {{run_url}}
-
-## 摘要
-
-${SUMMARY}
-
-## 根因猜测
-
-${ROOT_CAUSE}
-
-## 修复建议
-
-${FIX_SUGGESTION}
-
-## 脱敏日志摘要
-
-\`\`\`
-${REDACTED_TAIL}
-\`\`\`
-EOF
-)"
-  ```
-
-### 步骤 6：累计计数（可选 Slack）
+### 步骤 7：累计计数（可选 Slack）
 
 `severity/critical` 或 `category:infra` 的告警建议同时发送 Slack 通知（如
 `SLACK_WEBHOOK_URL` 存在）。
+
+### 步骤 8：输出总结
+
+打印本轮摘要：X 条失败处理，Y 条自动重跑，Z 条新建 issue，W 条更新已有 issue。
 
 ## 不做什么
 
