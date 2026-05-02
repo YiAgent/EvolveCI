@@ -6,6 +6,9 @@
     "auto_rerun": true,
     "notify": false,
     "severity": "low",
+    "description": "npm 注册表 DNS 解析失败",
+    "human_explanation": "npm 官方 registry (registry.npmjs.org) 的 DNS 解析临时失败。通常是网络波动或 DNS 服务器问题，不是代码 bug。自托管 runner 尤其容易遇到（公司 DNS 不稳定）。",
+    "action_suggestion": "自动重跑即可。如果 24h 内出现 ≥3 次，检查 runner 所在机器的 DNS 配置（/etc/resolv.conf），考虑换用 8.8.8.8 或 1.1.1.1。",
     "seen_count": 47,
     "last_seen": "2026-04-28",
     "source": "seed"
@@ -17,6 +20,9 @@
     "auto_rerun": true,
     "notify": false,
     "severity": "low",
+    "description": "PyPI 包下载超时",
+    "human_explanation": "从 PyPI (pypi.org) 下载 Python 包时连接超时。通常是 PyPI CDN 节点临时负载过高，或 runner 网络带宽不足。常见于 pip install 大包（如 torch、tensorflow）时。",
+    "action_suggestion": "自动重跑。如果频繁出现，考虑配置 pip 镜像源（如阿里云 mirror）或在 runner 上缓存 pip packages。",
     "seen_count": 32,
     "last_seen": "2026-04-27",
     "source": "seed"
@@ -28,6 +34,9 @@
     "auto_rerun": true,
     "notify": false,
     "severity": "low",
+    "description": "GitHub Container Registry 速率限制",
+    "human_explanation": "GHCR (ghcr.io) 的拉取速率被限制。免费账户每小时 500 次 pull，付费账户更高。通常发生在频繁构建 Docker 镜像的 CI 中。",
+    "action_suggestion": "自动重跑（等速率窗口重置）。长期方案：配置 GHCR token 或用 Docker layer cache 减少 pull 次数。",
     "seen_count": 18,
     "last_seen": "2026-04-26",
     "source": "seed"
@@ -39,6 +48,9 @@
     "auto_rerun": false,
     "notify": true,
     "severity": "high",
+    "description": "Runner 磁盘空间不足",
+    "human_explanation": "GitHub Actions runner 的磁盘满了。自托管 runner 常见问题——Docker 镜像、构建产物、缓存文件会逐渐占满磁盘。GitHub 托管 runner 有 14GB 可用空间，但大型项目也可能用完。",
+    "action_suggestion": "不要重跑（重跑也会失败）。需要人工清理 runner 磁盘：`docker system prune -af`、清理 /tmp、删除旧的 Actions 缓存。建议设置 cron 定期清理。",
     "seen_count": 5,
     "last_seen": "2026-04-25",
     "source": "seed"
@@ -50,6 +62,9 @@
     "auto_rerun": true,
     "notify": false,
     "severity": "low",
+    "description": "Runner 启动失败",
+    "human_explanation": "GitHub Actions runner 进程启动后没能连接到 GitHub 服务。可能是 runner 机器负载过高、网络不通、或者 runner 进程被 OOM killer 杀掉。自托管 runner 常见。",
+    "action_suggestion": "自动重跑。如果连续失败，检查 runner 机器状态（磁盘、内存、网络）。",
     "seen_count": 12,
     "last_seen": "2026-04-24",
     "source": "seed"
@@ -61,6 +76,9 @@
     "auto_rerun": true,
     "notify": false,
     "severity": "low",
+    "description": "Trivy 漏洞库下载失败",
+    "human_explanation": "Trivy 安全扫描器的漏洞数据库下载失败。Trivy 每 12 小时更新一次漏洞库，如果 GitHub Releases 的 CDN 临时不可用就会失败。",
+    "action_suggestion": "自动重跑。如果频繁出现，考虑在 runner 上缓存 Trivy DB（~/.cache/trivy/）。",
     "seen_count": 8,
     "last_seen": "2026-04-23",
     "source": "seed"
@@ -72,6 +90,9 @@
     "auto_rerun": true,
     "notify": false,
     "severity": "low",
+    "description": "TruffleHog 密钥扫描超时",
+    "human_explanation": "TruffleHog（密钥泄露扫描工具）扫描超时。通常是因为仓库历史 commit 太多，扫描整个 git log 耗时过长。",
+    "action_suggestion": "自动重跑。长期方案：限制 TruffleHog 只扫描最近 N 个 commit（--max-depth 参数）。",
     "seen_count": 6,
     "last_seen": "2026-04-22",
     "source": "seed"
@@ -83,6 +104,9 @@
     "auto_rerun": true,
     "notify": false,
     "severity": "low",
+    "description": "Anthropic API 速率限制",
+    "human_explanation": "Anthropic Claude API 返回 429 速率限制。API 有 RPM（每分钟请求数）和 TPM（每分钟 token 数）限制。通常在并行调用多个 agent 时触发。",
+    "action_suggestion": "自动重跑（等 60s 速率窗口重置）。如果频繁出现，增加请求间隔或升级 API 套餐。",
     "seen_count": 15,
     "last_seen": "2026-04-28",
     "source": "seed"
@@ -94,6 +118,9 @@
     "auto_rerun": true,
     "notify": false,
     "severity": "low",
+    "description": "LangSmith 追踪服务超时",
+    "human_explanation": "LangSmith（LangChain 的可观测性平台）返回 504 网关超时。这是 LangSmith 服务端问题，不是你的代码问题。只影响 tracing，不影响实际 LLM 调用。",
+    "action_suggestion": "自动重跑。如果持续超时，考虑在代码中设置 LANGCHAIN_TRACING_V2=false 禁用追踪。",
     "seen_count": 4,
     "last_seen": "2026-04-21",
     "source": "seed"
@@ -105,6 +132,9 @@
     "auto_rerun": true,
     "notify": true,
     "severity": "medium",
+    "description": "Docker daemon 连接失败",
+    "human_explanation": "CI 环境中 Docker daemon 没有运行或无法连接。GitHub 托管 runner 预装了 Docker，但自托管 runner 可能需要手动启动。也可能是因为上一个 job 没有正确清理导致 daemon 异常。",
+    "action_suggestion": "自动重跑一次。如果仍然失败，检查 runner 的 Docker 服务状态（systemctl status docker）。",
     "seen_count": 9,
     "last_seen": "2026-04-20",
     "source": "seed"

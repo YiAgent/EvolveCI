@@ -22,11 +22,36 @@ permissions:
   id-token: write       # harden-runner
 
 jobs:
+  collect:
+    runs-on: ubuntu-latest
+    outputs:
+      context: ${{ steps.data.outputs.context }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Phase 1: 聚合 24h CI 数据（零 AI 成本）
+      # 脚本查询所有仓库的 runs、计算指标、统计 issues，
+      # 输出结构化 JSON，agent 只负责写报告。
+      - name: Collect daily data
+        id: data
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bash scripts/collect-daily-data.sh > /tmp/daily-context.json
+          echo "context<<DAILY_EOF" >> "$GITHUB_OUTPUT"
+          cat /tmp/daily-context.json >> "$GITHUB_OUTPUT"
+          echo "DAILY_EOF" >> "$GITHUB_OUTPUT"
+
   daily:
+    needs: collect
     uses: ./.github/workflows/_call-harness.yml
     with:
       task: daily-report
-      prompt: /daily-report
-      max-turns: 60
-      timeout-minutes: 30
+      prompt: |-
+        /daily-report
+        ---
+        DATA_CONTEXT:
+        ${{ needs.collect.outputs.context }}
+      max-turns: 20
+      timeout-minutes: 10
     secrets: inherit

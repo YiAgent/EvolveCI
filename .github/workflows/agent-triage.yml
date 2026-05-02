@@ -27,13 +27,38 @@ permissions:
   id-token: write       # harden-runner
 
 jobs:
+  collect:
+    runs-on: ubuntu-latest
+    outputs:
+      context: ${{ steps.data.outputs.context }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Phase 1: 确定性数据收集（零 AI 成本，~30s）
+      # 脚本查询所有监控仓库的失败 runs，做 pattern 匹配和启发式分类，
+      # 输出结构化 JSON，agent 直接消费。
+      - name: Collect triage data
+        id: data
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bash scripts/collect-triage-data.sh 30m > /tmp/triage-context.json
+          # 注入为 step output（多行用 delimiter）
+          echo "context<<TRIAGE_EOF" >> "$GITHUB_OUTPUT"
+          cat /tmp/triage-context.json >> "$GITHUB_OUTPUT"
+          echo "TRIAGE_EOF" >> "$GITHUB_OUTPUT"
+
   triage:
+    needs: collect
     uses: ./.github/workflows/_call-harness.yml
     with:
       task: triage
-      prompt: ${{ inputs.prompt || '/triage' }}
-      max-turns: 30
-      timeout-minutes: 20
-      # Triage runs the log-redaction shell script on raw CI logs.
+      prompt: |-
+        ${{ inputs.prompt || '/triage' }}
+        ---
+        DATA_CONTEXT:
+        ${{ needs.collect.outputs.context }}
+      max-turns: 15
+      timeout-minutes: 10
       extra-allowed-tools: "Bash(bash lib/redact-log.sh),Bash(bash lib/),Bash(cut),Bash(tr)"
     secrets: inherit

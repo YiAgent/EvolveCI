@@ -45,48 +45,34 @@
 
 ### 记忆 / 状态规则
 
-- **不再向 `memory/` 写文件，不再 git commit 状态**。所有持久化经过 GitHub
-  Issues。
+- **不再向 `memory/` 写文件，不再 git commit 状态**。所有持久化经过 GitHub Issues。
+- **`memory/` 目录已完全废弃**——该目录是 v3/v4 时代的遗留，所有文件均为只读历史。
+  任何代码都不应读取 `memory/` 下的文件。
 - **去重**通过 `fingerprint:<12hex>` 标签实现：相同失败 → 累加到同一 issue。
 - **每周** `/weekly-report` 是唯一动 git 的命令；它在 `weekly/<iso-week>` 分支
   上更新本文件的"近期学习"章节，并打开 PR 等待 squash-merge。
-- 旧 `memory/` 目录保留为只读历史归档；任何代码都不应再读它，未来一次清理 PR 会删除它。
+
+### v5.1 数据流变更
+
+agent 不再自己查询 CI 数据。每个 workflow 启动前，`collect-*.sh` 脚本会
+完成所有数据收集和预处理（零 AI 成本），输出结构化 JSON 通过 `DATA_CONTEXT`
+注入。agent 只做：
+
+1. 读取 JSON → 做决策（分类、建议）
+2. 执行动作（创建 issue、重跑 workflow）
+3. 学习新 pattern（Tier 3 分析）
+
+Tier 2 启发式规则已在 `collect-triage-data.sh` 中实现，agent 无需重复。
 
 ## 快速参考
 
-### 监控的仓库
-→ `data/onboarded-repos.yml`
-
-### 已知失败模式库
-→ `gh issue list --label evolveci/pattern -L 100 --json body --jq '.[].body'`
-
-### 错误去重 / 历史 incidents
-→ `gh issue list --label evolveci/triage --state all`
-→ 同 fingerprint 的 issue 通过 `fingerprint:<12hex>` 标签精确定位
-
-### 熔断器状态
-→ 单个 `evolveci/circuit` issue 的 body（JSON）
-
-### 每日报告
-→ `gh issue list --label evolveci/daily`
-
-### 每周深度复盘
-→ 通过 PR 提交（标题前缀 `weekly:`，分支 `weekly/<iso-week>`）
-
-### 失败日志脱敏
-→ `lib/redact-log.sh`（每次分析前必须调用）
-
-## Tier 2 启发式规则（内置）
-
-| 关键词模式 | 分类 | 默认动作 |
-|-----------|------|---------|
-| `connection timed out`、`network unreachable`、`ECONNRESET` | flaky | 重跑，不通知 |
-| `permission denied`、`403 Forbidden`、`unauthorized` | infra | 通知，不重跑 |
-| `No space left on device`、`disk full` | infra | 通知，不重跑 |
-| `npm ERR! code E404`、`package not found` | dependency | 通知，不重跑 |
-| `compilation error`、`syntax error`、`build failed` | code | 通知，不重跑 |
-| `OOMKilled`、`out of memory` | infra | 通知，不重跑 |
-| `exit code 1`（无其他上下文） | unknown | Tier 3 深度分析 |
+- 监控仓库 → `data/onboarded-repos.yml`
+- 已知 patterns → `gh issue list --label evolveci/pattern -L 100`
+- 去重/历史 → `gh issue list --label evolveci/triage --state all`
+- 熔断器 → `evolveci/circuit` issue body
+- 日报 → `gh issue list --label evolveci/daily`
+- 周报 → PR（分支 `weekly/<iso-week>`）
+- 日志脱敏 → `lib/redact-log.sh`
 
 ## 近期学习（由 /weekly-report 维护）
 

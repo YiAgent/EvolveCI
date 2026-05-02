@@ -18,3 +18,12 @@ repos:
   - name: YiAgent/OpenCI
     workflows: "*"
     priority: high
+
+  - name: YiAgent/aicert
+    workflows: "*"
+    priority: high
+    exclude:
+      - "agent-heartbeat.yml"
+      - "agent-triage.yml"
+      - "agent-daily.yml"
+      - "agent-weekly.yml"
