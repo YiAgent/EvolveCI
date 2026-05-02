@@ -66,11 +66,12 @@ jq -c '.[]' "$SEED_FILE" | while IFS= read -r pattern; do
       ;;
   esac
 
+  BODY=$(printf '%s' "$pattern" | bash "$(dirname "$0")/render-pattern.sh")
   URL=$(gh issue create \
     --repo "$REPO" \
     --title "pattern: $ID" \
     --label "evolveci/pattern,severity/$SEV,category:$CAT" \
-    --body "$pattern")
+    --body "$BODY")
   CREATED=$((CREATED + 1))
   echo "{\"status\":\"created\",\"id\":\"$ID\",\"severity\":\"$SEV\",\"category\":\"$CAT\",\"url\":\"$URL\"}"
 done
