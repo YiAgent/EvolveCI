@@ -24,7 +24,9 @@ jobs:
       actions: read    # gh run list
       issues: read     # gh issue list (triage / pattern / circuit / daily)
     outputs:
-      context: ${{ steps.data.outputs.context }}
+      data_file: ${{ steps.data.outputs.data_file }}
+      runs: ${{ steps.data.outputs.runs }}
+      triage: ${{ steps.data.outputs.triage }}
     steps:
       - uses: actions/checkout@v4
 
@@ -37,9 +39,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           bash scripts/collect-daily-data.sh > /tmp/daily-context.json
-          echo "context<<DAILY_EOF" >> "$GITHUB_OUTPUT"
-          cat /tmp/daily-context.json >> "$GITHUB_OUTPUT"
-          echo "DAILY_EOF" >> "$GITHUB_OUTPUT"
+          echo "data_file=/tmp/daily-context.json" >> "$GITHUB_OUTPUT"
+          # 注入关键指标为标量
+          runs=$(jq -c '.runs' /tmp/daily-context.json)
+          triage=$(jq -c '.triage' /tmp/daily-context.json)
+          echo "runs=$runs" >> "$GITHUB_OUTPUT"
+          echo "triage=$triage" >> "$GITHUB_OUTPUT" 
 
   daily:
     needs: collect
@@ -52,11 +57,8 @@ jobs:
     uses: ./.github/workflows/_call-harness.yml
     with:
       task: daily-report
-      prompt: |-
-        /daily-report
-        ---
-        DATA_CONTEXT:
-        ${{ needs.collect.outputs.context }}
+      prompt-path: .claude/commands/daily-report.md
+      context: '{"data_file": "${{ needs.collect.outputs.data_file }}", "runs": "${{ needs.collect.outputs.runs }}", "triage": "${{ needs.collect.outputs.triage }}"}'
       max-turns: 20
       timeout-minutes: 10
     secrets: inherit

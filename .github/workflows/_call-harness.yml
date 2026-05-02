@@ -25,9 +25,20 @@ on:
         type: string
         required: true
       prompt:
-        description: "Direct prompt or /slash-command (resolved against caller's .claude/commands/)."
+        description: "Direct prompt text. Takes precedence over prompt-path."
         type: string
-        required: true
+        required: false
+        default: ""
+      prompt-path:
+        description: "Path to prompt file (relative to repo root). Used when prompt is empty."
+        type: string
+        required: false
+        default: ""
+      context:
+        description: "JSON object with scalar fields. Keys become {{name}} placeholders in prompt."
+        type: string
+        required: false
+        default: "{}"
       max-turns:
         description: "Maximum agent turns."
         type: number
@@ -57,6 +68,8 @@ jobs:
     with:
       task:                ${{ inputs.task }}
       prompt:              ${{ inputs.prompt }}
+      prompt-path:         ${{ inputs.prompt-path }}
+      context:             ${{ inputs.context }}
       # vars.CLAUDE_MODEL overrides the literal default for repo / org-wide
       # rollout (e.g. switch the whole project to claude-sonnet-4-5 without
       # touching workflow files).

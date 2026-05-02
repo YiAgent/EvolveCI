@@ -15,7 +15,15 @@
 
 ### 步骤 1：读取预处理数据
 
-解析 workflow 注入的 `DATA_CONTEXT` JSON。它包含：
+读取预处理数据文件（路径：`{{data_file}}`）：
+
+```bash
+CONTEXT=$(cat '{{data_file}}')
+```
+
+`$CONTEXT` 是一个 JSON 对象，包含：
+
+`$CONTEXT` 是一个 JSON 对象，包含：
 
 - `runs` — 统计：total, success, failure, cancelled, success_rate
 - `top_failures` — Top 5 失败 workflow（含 count、last_failure 时间）

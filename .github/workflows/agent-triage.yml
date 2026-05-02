@@ -29,7 +29,8 @@ jobs:
       actions: read    # gh run list
       issues: read     # gh issue list (pattern / circuit)
     outputs:
-      context: ${{ steps.data.outputs.context }}
+      data_file: ${{ steps.data.outputs.data_file }}
+      summary: ${{ steps.data.outputs.summary }}
     steps:
       - uses: actions/checkout@v4
 
@@ -42,10 +43,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           bash scripts/collect-triage-data.sh 30m > /tmp/triage-context.json
-          # 注入为 step output（多行用 delimiter）
-          echo "context<<TRIAGE_EOF" >> "$GITHUB_OUTPUT"
-          cat /tmp/triage-context.json >> "$GITHUB_OUTPUT"
-          echo "TRIAGE_EOF" >> "$GITHUB_OUTPUT"
+          # 传文件路径给 agent（context 只支持标量）
+          echo "data_file=/tmp/triage-context.json" >> "$GITHUB_OUTPUT"
+          # 同时注入 summary 标量用于 prompt 模板
+          jq -c '.summary' /tmp/triage-context.json >> /tmp/summary.json
+          echo "summary=$(cat /tmp/summary.json)" >> "$GITHUB_OUTPUT" 
 
   triage:
     needs: collect
@@ -58,11 +60,8 @@ jobs:
     uses: ./.github/workflows/_call-harness.yml
     with:
       task: triage
-      prompt: |-
-        ${{ inputs.prompt || '/triage' }}
-        ---
-        DATA_CONTEXT:
-        ${{ needs.collect.outputs.context }}
+      prompt-path: .claude/commands/triage.md
+      context: '{"data_file": "${{ needs.collect.outputs.data_file }}", "summary": "${{ needs.collect.outputs.summary }}"}'
       max-turns: 15
       timeout-minutes: 10
       extra-allowed-tools: "Bash(bash lib/redact-log.sh),Bash(bash lib/),Bash(cut),Bash(tr)"

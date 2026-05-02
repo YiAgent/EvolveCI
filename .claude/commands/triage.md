@@ -10,7 +10,13 @@
 
 ### 步骤 1：解析输入数据
 
-读取 workflow 注入的 `DATA_CONTEXT` JSON。它包含：
+读取预处理数据文件（路径：`{{data_file}}`）：
+
+```bash
+CONTEXT=$(cat '{{data_file}}')
+```
+
+`$CONTEXT` 是一个 JSON 对象，包含：
 
 - `failures[]` — 每条失败的详情：
   - `repo`, `workflow`, `failed_step`, `fingerprint`, `created_at`
@@ -21,7 +27,7 @@
   - `suggested_action` — 建议动作（use_pattern / use_heuristic / tier3_analysis）
 - `summary` — 汇总：total_failures, tier1_matched, tier2_matched, needs_agent
 
-如果 `total_failures == 0`，直接输出"本轮无失败"后退出。
+快速检查 summary（`{{summary}}`）：如果 `total_failures == 0`，直接输出"本轮无失败"后退出。
 
 ### 步骤 2：检查熔断器
 
