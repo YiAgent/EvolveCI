@@ -120,7 +120,7 @@ fi
 
 ### 4. Slack（可选）
 
-`SR < 70%` 或 `FAIL > 50` 或 `CIRC = true` → 短摘要 + Issue URL 到 `SLACK_WEBHOOK_URL`。
+`SR < 70%` 或 `FAIL > 50` 或 `CIRC = true` → 短摘要 + Issue URL 到 `SLACK_CI_WEBHOOK`。
 
 ## 不做什么
 

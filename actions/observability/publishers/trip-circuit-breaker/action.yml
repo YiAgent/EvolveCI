@@ -52,7 +52,10 @@ runs:
 
         ### Recovery
 
-        Remove the \`ci:circuit-broken\` label from this issue to resume auto-triage.
+        To resume auto-triage, edit the canonical \`evolveci/circuit\` issue
+        body and set \`active: false\` (the JSON state lives there, not on this
+        alert). Closing this alert issue or removing its label does **not**
+        clear the breaker.
 
         ---
         _Automated by evolveCI_"

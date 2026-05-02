@@ -31,5 +31,5 @@ jobs:
       # renders prose and opens the PR via weekly-pr.sh.
       max-turns: 30
       timeout-minutes: 30
-      extra-allowed-tools: "Bash(python3 scripts/collect-weekly.py),Bash(bash scripts/weekly-pr.sh),Bash(jq),Bash(pip install --user pyyaml),Bash(python3 -m pip install --user pyyaml)"
+      extra-allowed-tools: "Bash(python3 scripts/collect-weekly.py),Bash(bash scripts/weekly-pr.sh),Bash(jq),Bash(date),Bash(gh issue list),Bash(pip install --user pyyaml),Bash(python3 -m pip install --user pyyaml)"
     secrets: inherit
