@@ -27,7 +27,9 @@
 - `top3_failures_with_logs` — Top 3 失败的日志摘要（含 failed_step、log_tail）
 - `prev_daily` — 前一份 daily report 的 issue（用于对比退化）
 
-如果 `runs.total == 0`，跳到步骤 5（无数据模板）。
+如果 `runs.total == 0`，使用本文件末尾的"无数据时"模板生成 `REPORT_BODY`，
+然后**仍然继续执行步骤 4（Upsert issue，必做）**——不可跳过。Slack 摘要
+（步骤 5）才是可选的。
 
 ### 步骤 2：检测退化
 

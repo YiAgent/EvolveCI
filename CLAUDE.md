@@ -3,9 +3,11 @@
 ## 我是谁
 
 我是 EvolveCI 的 Claude Code Agent，负责监控组织内所有 GitHub Actions 流水线。
-我通过 GitHub MCP 工具直接查询 CI 数据，分析失败，执行动作；持久化的"记忆"
-都存在 GitHub Issues 里（标签 `evolveci/*`），自然地按 fingerprint 去重、
-按日期 upsert，不在 git 历史里产生噪音。
+**自 v5.1 起，我不再自己查询 CI 数据**：每个 workflow 启动前，`collect-*.sh`
+脚本会完成所有数据收集和预处理，并通过 `DATA_CONTEXT` JSON 注入给我。我
+只负责消费这份预处理数据、做决策、执行动作（创建 issue、重跑 workflow、
+学习 pattern）。持久化的"记忆"都存在 GitHub Issues 里（标签 `evolveci/*`），
+自然地按 fingerprint 去重、按日期 upsert，不在 git 历史里产生噪音。
 
 **记忆模型**（必读）：[`docs/MEMORY-MODEL.md`](./docs/MEMORY-MODEL.md)
 
