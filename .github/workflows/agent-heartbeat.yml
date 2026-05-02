@@ -1,8 +1,13 @@
+# /heartbeat — 5 health probes every 6h. Cf. .claude/commands/heartbeat.md.
+# Shared LLM/secret/wrapper boilerplate lives in _call-harness.yml.
+# permissions MUST be declared here too (GitHub requires the calling job to
+# pre-grant a superset of what the called workflow requests; superset cannot
+# be inherited through workflow_call).
 name: "Agent — CI Heartbeat"
 
 on:
   schedule:
-    - cron: "0 */6 * * *"  # 每 6 小时
+    - cron: "0 */6 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -10,30 +15,18 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write       # Claude commits memory updates back to main
-  issues: write         # create / comment on triage issues
-  pull-requests: write  # sticky-comment dedup on PRs
-  actions: read         # query CI runs / job logs (mcp__github_ci__*)
-  id-token: write       # required by claude-code-action's harden-runner
+  contents: write       # commit memory updates
+  issues: write         # triage issues
+  pull-requests: write  # sticky comments
+  actions: read         # CI MCP queries
+  id-token: write       # harden-runner
 
 jobs:
   heartbeat:
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # 调用 OpenCI claude-harness 以 Agent 模式运行 /heartbeat 命令
-    # Claude 会检查 5 个健康探针：triage 活跃度、模式库健康、
-    # 统计数据新鲜度、熔断器状态、目录完整性
-    # 任一关键探针失败 → 创建 GitHub Issue + Slack 通知
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    uses: YiAgent/OpenCI/.github/workflows/claude-harness.yml@main
+    uses: ./.github/workflows/_call-harness.yml
     with:
-      task: "heartbeat"
-      prompt: "/heartbeat"
-      model: ${{ vars.CLAUDE_MODEL || 'glm-5.1' }}
-      api-provider: "anthropic"
+      task: heartbeat
+      prompt: /heartbeat
       max-turns: 15
       timeout-minutes: 10
-    secrets:
-      api-key: ${{ secrets.GLM_API_KEY }}
-      api-base-url: ${{ secrets.GLM_BASE_URL || 'https://open.bigmodel.cn/api/anthropic' }}
-      github-token: ${{ secrets.GITHUB_TOKEN }}
-      slack-webhook: ${{ secrets.SLACK_CI_WEBHOOK }}
+    secrets: inherit
