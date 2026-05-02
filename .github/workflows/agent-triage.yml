@@ -23,7 +23,7 @@ permissions: {}
 
 jobs:
   collect:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read   # checkout
       actions: read    # gh run list
