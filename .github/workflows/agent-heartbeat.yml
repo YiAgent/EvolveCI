@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   heartbeat:
-    uses: ./.github/workflows/_call-harness.yml
+    uses: ./.github/workflows/reusable/call-harness.yml
     with:
       task: heartbeat
       prompt: /heartbeat
