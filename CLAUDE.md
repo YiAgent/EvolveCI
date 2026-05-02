@@ -92,7 +92,15 @@
 
 <!-- 格式: YYYY-MM-DD: <pattern-id> — <一句话描述> -->
 <!-- /weekly-report 会在此处追加最近 4 周发现的重要新模式 -->
-- 2026-05-02: _本周无新模式_（系统首周上线，尚无 incident 数据）
+
+### 2026-W18 (2026-04-25 → 2026-05-02)
+
+- **v5 首周上线**: Issues 记忆模型就绪，circuit breaker (#15) + heartbeat alert (#16) 已创建
+- **仓库已上线**: YiAgent/EvolveCI + YiAgent/OpenCI 已替换占位数据（PR #14）
+- **EvolveCI Tests**: 43 runs, 41 success (95.3%) — 稳定
+- **EvolveCI Agent 改善**: Heartbeat 16 runs (44% success), Daily 7 runs (43%), Triage 7 runs (71%), Weekly 7 runs (43%) — 早期 startup_failure 已消除
+- **OpenCI 严重问题**: issue-comment 0/15 成功, pr.yml 0/12, issue-branch 0/11, pr-summary 0/11 — 配置级故障
+- **行动**: OpenCI 工作流配置需紧急修复；EvolveCI agent 成功率需通过 issue 权限调优提升
 
 ## 自我健康检查（/heartbeat 使用）
 
