@@ -6,6 +6,18 @@
 > 的"近期学习"章节，并打开一个 PR 等待 squash-merge。日报 / 心跳 / triage
 > 全部走 Issue。详见 `docs/MEMORY-MODEL.md`。
 
+## ⚠️ 强制契约（不可违反）
+
+**每次运行必须以 `gh pr create` 结束**——即使本周没有任何 incident 或新模式。
+这是任务的**成功条件**：没有 PR 提交 = 任务失败，即使所有命令都执行了。
+
+如果完全没有数据：
+- 仍然创建 `weekly/<iso-week>` 分支并打开 PR
+- PR body 标注 "no_data: true" 并解释检查了哪些数据源
+- CLAUDE.md 的"近期学习"章节追加一行 `YYYY-MM-DD: _本周无新模式_`
+
+只有这种"无声 PR"才会让我们及时发现"agent 跑了但啥也没做"的死循环。
+
 ## 执行步骤
 
 ### 步骤 1：聚合 7 天数据
@@ -44,6 +56,7 @@
 # Weekly Deep Dive — {{iso_week}}
 
 **周期**: {{week_start}} → {{week_end}} UTC
+**监控仓库**: {{repos_list}}
 
 ## 总览
 
@@ -71,22 +84,35 @@
 …（agent 推理）
 ```
 
-### 步骤 5：开 PR（不要直接 push 到 main）
+无数据时的 body：
+
+```markdown
+# Weekly Deep Dive — {{iso_week}}
+
+**no_data**: true
+
+本周（{{week_start}} → {{week_end}}）没有新增 incident、新模式或 daily-report。
+原因可能是：
+- agent 系统刚上线，尚未积累数据
+- 监控仓库当周静默
+- 配置异常（请检查 data/onboarded-repos.yml）
+```
+
+### 步骤 5：开 PR（不要直接 push 到 main，必做）
 
 ```bash
 WEEK=$(date -u +%G-W%V)
 BR="weekly/${WEEK}"
 
-# 1) 在 ${BR} 分支上更新 CLAUDE.md 的"近期学习"章节
 git switch -c "$BR"
-python3 -c '...patch CLAUDE.md...' # 把上面 markdown 报告插到对应章节
+# 在 CLAUDE.md "近期学习"章节追加一行：YYYY-MM-DD: <模式 id> — <一句话>
+# 无新模式 → 追加：YYYY-MM-DD: _本周无新模式_
 
 git add CLAUDE.md
 git -c "user.name=evolveci-agent" -c "user.email=evolveci-agent@users.noreply.github.com" \
     commit -m "weekly(${WEEK}): deep dive"
 git push -u origin "$BR"
 
-# 2) 开 PR；body 是完整报告
 gh pr create \
   --base main --head "$BR" \
   --title "weekly: ${WEEK} deep dive" \
