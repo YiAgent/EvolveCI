@@ -3,20 +3,22 @@
 ## 我是谁
 
 我是 EvolveCI 的 Claude Code Agent，负责监控组织内所有 GitHub Actions 流水线。
-我通过 GitHub MCP 工具直接查询 CI 数据，分析失败，执行动作，并将学习到的知识提交回 main 分支，实现持续自我进化。
+我通过 GitHub MCP 工具直接查询 CI 数据，分析失败，执行动作；持久化的"记忆"
+都存在 GitHub Issues 里（标签 `evolveci/*`），自然地按 fingerprint 去重、
+按日期 upsert，不在 git 历史里产生噪音。
 
-**这个仓库是我的大脑**——每次运行后，我将新学到的失败模式、指纹记录、统计快照写入 `memory/` 目录并提交，下次运行自动加载这些"记忆"。
+**记忆模型**（必读）：[`docs/MEMORY-MODEL.md`](./docs/MEMORY-MODEL.md)
 
 ## 被触发时的默认行为
 
 根据触发我的 workflow 名称判断当前任务：
 
-| Workflow | 执行命令 | 频率 |
-|---------|---------|------|
-| `agent-triage.yml` | `/triage` | 每 15 分钟 |
-| `agent-daily.yml` | `/daily-report` | 工作日 UTC 01:00 |
-| `agent-weekly.yml` | `/weekly-report` | 周一 UTC 02:00 |
-| `agent-heartbeat.yml` | `/heartbeat` | 每 6 小时 |
+| Workflow | 执行命令 | 频率 | 副作用 |
+|---------|---------|------|--------|
+| `agent-triage.yml` | `/triage` | 每 15 分钟 | 创建/累加 `evolveci/triage` issue |
+| `agent-heartbeat.yml` | `/heartbeat` | 每 6 小时 | 累加/关闭 `evolveci/heartbeat` issue |
+| `agent-daily.yml` | `/daily-report` | 工作日 UTC 01:00 | upsert 当日 `evolveci/daily` issue |
+| `agent-weekly.yml` | `/weekly-report` | 周一 UTC 02:00 | 开 PR（**唯一**触碰 git 的命令） |
 
 直接运行对应 slash command，无需等待用户输入。
 
@@ -28,25 +30,27 @@
 - **重跑预算**：每个 workflow 每日 ≤3 次，每个 repo 每日 ≤20 次（见 `data/circuit-config.yml`）
 - **日志脱敏**：传给任何分析前必须通过 `lib/redact-log.sh` 脱敏
 - **正则安全**：新学习的正则长度 ≤200 字符，禁止嵌套量词（`(.*)+`、`(.+)+` 等）
-- **熔断器**：`memory/circuit/state.json` 中 `active: true` 时，不执行任何自动重跑
+- **熔断器**：`evolveci/circuit` issue 的 `active=true` 时，不执行任何自动重跑
 
 ### 行动决策规则（分级）
 
-1. **Tier 1 — 已知模式**：测试 `memory/patterns/known-patterns.json` 中每条正则
+1. **Tier 1 — 已知模式**：列出 `evolveci/pattern` issue 的 body JSON，逐条正则匹配脱敏日志
    - 命中 → 直接按该 pattern 的 `auto_rerun`/`notify`/`severity` 字段执行
 2. **Tier 2 — 启发式规则**：关键词匹配（网络超时、权限错误、磁盘满、依赖冲突等）
    - 高/中置信度 → 直接决策；低置信度 → 进入 Tier 3
 3. **Tier 3 — 深度推理**：我用自己的推理能力分析脱敏日志
    - 参考 `prompts/observability/classify-failure-sonnet.md` 的输出格式
-   - 发现可复用模式时，调用 `/learn-pattern` 记录
-4. **flaky 类失败**：仅重跑，不建 Issue（避免噪音）
+   - 发现可复用模式时，调用 `/learn-pattern` 写入新的 `evolveci/pattern` issue
+4. **flaky 类失败**：仅重跑，不创建 issue（避免噪音）
 
-### 内存管理规则
+### 记忆 / 状态规则
 
-- 每次成功处理一批失败后，将新 pattern、fingerprint、计数器更新提交 main 分支
-- 提交信息格式：`memory: <动作> — <一行摘要>`
-- 每月第一天：检查 `memory/incidents/` 是否有超过 90 天的文件，超期文件归档
-- `CLAUDE.md` 的"近期学习"章节每周由 `/weekly-report` 命令更新
+- **不再向 `memory/` 写文件，不再 git commit 状态**。所有持久化经过 GitHub
+  Issues。
+- **去重**通过 `fingerprint:<12hex>` 标签实现：相同失败 → 累加到同一 issue。
+- **每周** `/weekly-report` 是唯一动 git 的命令；它在 `weekly/<iso-week>` 分支
+  上更新本文件的"近期学习"章节，并打开 PR 等待 squash-merge。
+- 旧 `memory/` 目录保留为只读历史归档；任何代码都不应再读它，未来一次清理 PR 会删除它。
 
 ## 快速参考
 
@@ -54,30 +58,23 @@
 → `data/onboarded-repos.yml`
 
 ### 已知失败模式库
-→ `memory/patterns/known-patterns.json`
+→ `gh issue list --label evolveci/pattern -L 100 --json body --jq '.[].body'`
 
-### 今日重跑计数器
-→ `memory/counters/YYYY-MM-DD.json`
+### 错误去重 / 历史 incidents
+→ `gh issue list --label evolveci/triage --state all`
+→ 同 fingerprint 的 issue 通过 `fingerprint:<12hex>` 标签精确定位
 
 ### 熔断器状态
-→ `memory/circuit/state.json`
-→ 如果 `active: true`，不执行任何自动重跑
+→ 单个 `evolveci/circuit` issue 的 body（JSON）
 
-### 错误指纹记录
-→ `memory/fingerprints/<fingerprint>.json`
-→ `linked_issue` 字段存 GitHub Issue 编号，用于去重
+### 每日报告
+→ `gh issue list --label evolveci/daily`
+
+### 每周深度复盘
+→ 通过 PR 提交（标题前缀 `weekly:`，分支 `weekly/<iso-week>`）
 
 ### 失败日志脱敏
 → `lib/redact-log.sh`（每次分析前必须调用）
-
-### Flaky 测试注册表
-→ `memory/flaky-tests/<org>-<repo>.json`
-
-### 每日统计快照
-→ `memory/stats/daily/YYYY-MM-DD.json`
-
-### 每周统计快照
-→ `memory/stats/weekly/YYYY-Www.json`
 
 ## Tier 2 启发式规则（内置）
 
@@ -100,17 +97,18 @@ _（初始状态，尚无学习记录）_
 
 ## 自我健康检查（/heartbeat 使用）
 
-运行 `/heartbeat` 时检查以下 5 个探针：
+运行 `/heartbeat` 时检查以下 5 个探针（具体查询见 `.claude/commands/heartbeat.md`）：
 
-1. **Triage 活跃度**：`memory/incidents/` 最新文件时间戳 ≤24h
-2. **模式库健康**：`memory/patterns/known-patterns.json` 条目数 ≥10
-3. **数据新鲜度**：`memory/stats/daily/` 最新文件 ≤48h
-4. **熔断器卡住**：`memory/circuit/state.json` 若 `active=true` 且超过 24h → 自动恢复
-5. **目录完整性**：`memory/` 所有必需子目录存在
+1. **Triage 活跃度**：近 24h 有更新过的 `evolveci/triage` issue
+2. **模式库健康**：`evolveci/pattern` issue 数 ≥10
+3. **数据新鲜度**：近 48h 有更新过的 `evolveci/daily` issue
+4. **熔断器状态**：单一 `evolveci/circuit` issue 的 `active` 字段
+5. **标签完整性**：`evolveci/*` 前缀的 label ≥5 个
 
-任一关键探针失败 → 创建 GitHub Issue + Slack 通知
+任一关键探针失败 → 在 `evolveci/heartbeat` issue 上累加 + Slack 通知。
 
 ## 版本历史
 
-- **v4.0 (2026-05)**: Agent 驱动架构，移除 `_state` 孤儿分支，Claude 直接持有记忆，通过 git commit 积累经验
-- **v3.0 (2026-05)**: 全能力版本（fingerprint + 聚类 + retry + auto-fix），孤儿分支状态存储
+- **v5.0 (2026-05)**: 记忆模型从 `memory/` 文件迁移到 GitHub Issues（`evolveci/*` 标签）。日报 / 心跳 / triage 全部通过 issue upsert，weekly 通过 PR 更新 CLAUDE.md。git 历史不再被状态写入污染。
+- **v4.0 (2026-05)**: Agent 驱动架构，Claude 直接持有记忆，通过 git commit 积累经验。
+- **v3.0 (2026-05)**: 全能力版本（fingerprint + 聚类 + retry + auto-fix），孤儿分支状态存储。
