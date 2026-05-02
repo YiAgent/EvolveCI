@@ -29,3 +29,4 @@ jobs:
       prompt: /daily-report
       max-turns: 40
       timeout-minutes: 25
+    secrets: inherit

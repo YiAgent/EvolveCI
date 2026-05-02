@@ -36,3 +36,4 @@ jobs:
       timeout-minutes: 20
       # Triage runs the log-redaction shell script on raw CI logs.
       extra-allowed-tools: "Bash(bash lib/redact-log.sh),Bash(bash lib/),Bash(cut),Bash(tr)"
+    secrets: inherit
