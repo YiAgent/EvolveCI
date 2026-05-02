@@ -106,6 +106,60 @@ def gh_issues_json(args: list[str]) -> list[dict]:
     return json.loads(raw) if raw else []
 
 
+def fetch_top3_with_logs(
+    repos: list[dict], since: dt.datetime, *, redact_sh: Path,
+) -> list[dict]:
+    """For the 3 most-recent failures across onboarded repos, attach the
+    failed step name + redacted log tail. Lets the daily report agent write
+    a one-sentence Chinese summary per failure without re-querying gh."""
+    candidates: list[dict] = []
+    for repo in repos:
+        excludes = set(repo.get("exclude") or [])
+        runs = runs_for(repo["name"], since, exclude_files=excludes)
+        for run in runs:
+            if run.get("conclusion") != "failure":
+                continue
+            candidates.append({
+                "run_id": run["databaseId"],
+                "repo": repo["name"],
+                "workflow": run.get("workflowName") or run.get("name") or "?",
+                "branch": run.get("headBranch", ""),
+                "url": run.get("url", ""),
+                "created_at": run.get("createdAt"),
+            })
+    candidates.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+    top3 = candidates[:3]
+
+    enriched: list[dict] = []
+    for c in top3:
+        # Failed step name.
+        jobs_raw = gh(["run", "view", str(c["run_id"]), "--repo", c["repo"], "--json", "jobs"])
+        failed_step = ""
+        if jobs_raw:
+            for job in (json.loads(jobs_raw).get("jobs") or []):
+                if job.get("conclusion") != "failure":
+                    continue
+                for step in job.get("steps") or []:
+                    if step.get("conclusion") == "failure":
+                        failed_step = f"{job.get('name', '?')} / {step.get('name', '?')}"
+                        break
+                if failed_step:
+                    break
+        # Last 30 redacted lines.
+        log_proc = subprocess.run(
+            ["gh", "run", "view", str(c["run_id"]), "--repo", c["repo"], "--log-failed"],
+            capture_output=True, text=True, check=False,
+        )
+        tail = "\n".join(log_proc.stdout.splitlines()[-30:])
+        if tail and redact_sh.exists():
+            r = subprocess.run(["bash", str(redact_sh)], input=tail,
+                               capture_output=True, text=True)
+            if r.returncode == 0:
+                tail = r.stdout
+        enriched.append({**c, "failed_step": failed_step, "redacted_tail": tail})
+    return enriched
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n", 1)[0])
     ap.add_argument("--repos-file", default="data/onboarded-repos.yml")
@@ -212,6 +266,27 @@ def main() -> int:
         except json.JSONDecodeError:
             pass
 
+    # Previous daily issue (most recent before today). Body is what the agent
+    # uses for trend comparison; we send the lot so it can do its own diff.
+    prev_daily_raw = gh_issues_json([
+        "issue", "list", "--repo", dedup_repo,
+        "--label", "evolveci/daily", "--state", "all", "-L", "2",
+        "--json", "number,title,body,createdAt",
+    ])
+    today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+    prev_daily = next(
+        (it for it in prev_daily_raw
+         if (it.get("createdAt") or "")[:10] != today),
+        None,
+    )
+
+    # Top-3 most recent failures, with redacted log tail. The daily agent
+    # writes a Chinese one-sentence summary per failure from this.
+    top3 = fetch_top3_with_logs(
+        repos, since,
+        redact_sh=Path(__file__).resolve().parent.parent / "lib" / "redact-log.sh",
+    )
+
     out = {
         "schema_version": 1,
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
@@ -220,12 +295,14 @@ def main() -> int:
         "repos": repo_names,
         "totals": totals,
         "top_failing_workflows": top_failing,
+        "top3_failures_with_logs": top3,
         "triage": {
             "new": {"count": len(new_triage), "samples": issue_summary(new_triage)},
             "open_old": {"count": len(open_old_triage), "samples": issue_summary(open_old_triage)},
             "patterns_added": {"count": len(new_patterns), "samples": issue_summary(new_patterns)},
         },
         "circuit": circuit,
+        "prev_daily": prev_daily,
         "no_data": totals["runs"] == 0,
     }
     Path(args.out).write_text(json.dumps(out, indent=2, ensure_ascii=False))

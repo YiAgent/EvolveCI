@@ -161,7 +161,10 @@ def match_tier1(log: str, patterns: list[dict]) -> dict:
                     "severity": p.get("severity", "info"),
                     "auto_rerun": bool(p.get("auto_rerun", False)),
                     "notify": bool(p.get("notify", False)),
-                    "fix_hint": p.get("fix_hint", ""),
+                    # action_suggestion is the v5.1 field; fall back to legacy
+                    # fix_hint for patterns that haven't been re-rendered yet.
+                    "action_suggestion": p.get("action_suggestion") or p.get("fix_hint", ""),
+                    "description": p.get("description", ""),
                 }
         except re.error:
             sys.stderr.write(f"WARN: invalid regex in pattern {p.get('id')}: {regex!r}\n")

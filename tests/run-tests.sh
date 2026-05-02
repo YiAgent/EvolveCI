@@ -298,10 +298,10 @@ test_agent_memory() {
     else
       fail "known-patterns.seed.json has fewer than 10 patterns"
     fi
-    if python3 -c "import json; d=json.load(open('$PROJECT_ROOT/data/known-patterns.seed.json')); assert all('description' in p and 'fix_hint' in p for p in d)" 2>/dev/null; then
-      pass "every seed pattern carries description + fix_hint"
+    if python3 -c "import json; d=json.load(open('$PROJECT_ROOT/data/known-patterns.seed.json')); assert all('description' in p and 'human_explanation' in p and 'action_suggestion' in p for p in d)" 2>/dev/null; then
+      pass "every seed pattern carries description + human_explanation + action_suggestion"
     else
-      fail "some seed patterns are missing description or fix_hint"
+      fail "some seed patterns missing description / human_explanation / action_suggestion"
     fi
   else
     fail "data/known-patterns.seed.json not found"
@@ -337,7 +337,8 @@ test_agent_prompts() {
     done
   done
 
-  # Every non-exempt command must invoke a v5.1 collector script.
+  # Every non-exempt command must consume DATA_CONTEXT (the prompt-injected
+  # JSON written by the workflow's collect: job).
   local exempt=("check-circuit.md" "learn-pattern.md" "heartbeat.md")
   for cmd in "$commands_dir"/*.md; do
     local base
@@ -347,10 +348,10 @@ test_agent_prompts() {
       [ "$base" = "$ex" ] && skip=true && break
     done
     $skip && continue
-    if grep -qE 'scripts/(build-triage-input|collect-daily|collect-weekly)\.py' "$cmd"; then
-      pass "$base invokes a v5.1 collector"
+    if grep -q 'DATA_CONTEXT' "$cmd"; then
+      pass "$base consumes DATA_CONTEXT"
     else
-      fail "$base does not invoke any v5.1 collector script"
+      fail "$base does not parse DATA_CONTEXT (the workflow-injected JSON)"
       violations=$((violations + 1))
     fi
   done

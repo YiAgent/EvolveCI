@@ -2,11 +2,12 @@
 
 **触发**：`agent-weekly.yml` 周一 UTC 02:00，或 `workflow_dispatch`。
 
-> 这是四个 agent 中**唯一**会动 git 的命令：在新分支上更新 `CLAUDE.md` 的
-> "近期学习"章节，并打开 PR。
+> **数据已注入** — workflow 的 `collect:` job 已经跑过 `scripts/collect-weekly.py`，
+> 7d 总览 + DORA + MTTR + by-day 全部通过 prompt 中的 `DATA_CONTEXT:` 段传给我。
+> 我**只**负责渲染中文 markdown 报告 + 决定 CLAUDE.md 学习行内容 + 调用
+> `weekly-pr.sh` 开 PR。
 >
-> 数据收集由 `scripts/collect-weekly.py` 一步完成；我（agent）只负责渲染
-> 中文 markdown 报告 + 决定 CLAUDE.md 学习行内容 + 调用 `weekly-pr.sh` 开 PR。
+> 这是四个 agent 中**唯一**会动 git 的命令。
 
 ## ⚠️ 强制契约
 
@@ -15,12 +16,20 @@
 
 ## 步骤
 
-### 1. 预处理
+### 1. 读取 DATA_CONTEXT
 
 ```bash
-pip install --user --quiet pyyaml >/dev/null 2>&1 || python3 -m pip install --user --quiet pyyaml >/dev/null 2>&1
-python3 scripts/collect-weekly.py --out /tmp/weekly-stats.json
+sed -n '/^DATA_CONTEXT:/,$p' <<< "$PROMPT_BODY" | sed '1d' > /tmp/weekly-stats.json
 ```
+
+字段（节选）：
+
+- `totals.{runs,success,failure,success_rate,flaky_rate}`
+- `by_day[]` — 每天的 runs / success / failures
+- `top_failing_workflows[]` — Top 10
+- `triage.{new,closed,open_at_week_end,patterns_added,mttr_hours_p50,mttr_hours_p95}`
+- `dora.{deployment_frequency_per_day,change_failure_rate,mttr_hours}`
+- `iso_week`、`since`、`until`、`no_data`
 
 ### 2. 归档过期 incident
 
@@ -37,7 +46,7 @@ gh issue list --label evolveci/triage --state closed \
 
 ### 3. 渲染报告 markdown
 
-读 `/tmp/weekly-stats.json`，套用模板：
+#### 有数据时
 
 ```markdown
 # Weekly Deep Dive — {{iso_week}}
@@ -50,8 +59,8 @@ gh issue list --label evolveci/triage --state closed \
 | 指标 | 本周 |
 |------|------|
 | run 总数 | {{totals.runs}} |
-| 成功率 | {{totals.success_rate * 100}}% |
-| flaky 率 | {{totals.flaky_rate * 100}}% |
+| 成功率 | {{success_rate_pct}}% |
+| flaky 率 | {{flaky_rate_pct}}% |
 
 ## DORA
 
@@ -79,7 +88,7 @@ gh issue list --label evolveci/triage --state closed \
 （这是我推理的部分 — 1-3 句话）
 ```
 
-`no_data=true` 时的退化版本：
+#### `no_data=true` 时
 
 ```markdown
 # Weekly Deep Dive — {{iso_week}}
@@ -94,7 +103,6 @@ gh issue list --label evolveci/triage --state closed \
 ### 4. 决定 CLAUDE.md 学习行
 
 ```bash
-# 有新 pattern → 取最值得记的那条；否则用占位
 PATTERN_COUNT=$(jq '.triage.patterns_added.count' /tmp/weekly-stats.json)
 TODAY=$(date -u +%Y-%m-%d)
 
@@ -125,6 +133,6 @@ PR 由人评审后 squash-merge。**不**自动 admin merge。
 
 ## 不做什么
 
+- 不调用 `python3 scripts/collect-weekly.py` — 数据已经在 DATA_CONTEXT 里
 - 不直接 push 到 main
 - 不 close 仍 open 的 `evolveci/triage`（除非 `status/recovered` 已存在 ≥7 天）
-- 不在 prompt 中再查 gh — 用 `/tmp/weekly-stats.json`

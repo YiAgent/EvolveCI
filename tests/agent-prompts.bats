@@ -56,8 +56,8 @@ forbidden_patterns=(
   fi
 }
 
-@test "every command file declares its preprocessor source (or is exempt)" {
-  # Commands that don't need a preprocessor.
+@test "every command file consumes DATA_CONTEXT (or is exempt)" {
+  # Commands that don't ride on the v5.1 collect-job pipeline.
   local exempt=(check-circuit.md learn-pattern.md heartbeat.md)
 
   local missing=()
@@ -69,8 +69,8 @@ forbidden_patterns=(
       [ "$base" = "$ex" ] && skip=true && break
     done
     $skip && continue
-    if ! grep -qE 'scripts/(build-triage-input|collect-daily|collect-weekly)\.py' "$cmd"; then
-      missing+=("$cmd does not invoke a v5.1 collector script")
+    if ! grep -q 'DATA_CONTEXT' "$cmd"; then
+      missing+=("$cmd does not parse DATA_CONTEXT (workflow-injected JSON)")
     fi
   done
 

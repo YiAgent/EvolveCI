@@ -9,8 +9,9 @@
     "seen_count": 47,
     "last_seen": "2026-04-28",
     "source": "seed",
-    "description": "npm 安装阶段无法解析 registry.npmjs.org 域名 (DNS/EAI_AGAIN/ENOTFOUND)。通常是 GitHub runner 出口网络抖动，几秒内自愈。",
-    "fix_hint": "直接重跑即可。如果同一 fingerprint 24h 内 ≥3 次，检查 runner 区域或换 npm 镜像 (例如 npmmirror)。"
+    "description": "npm 注册表 DNS 解析失败",
+    "human_explanation": "npm 安装阶段无法解析 registry.npmjs.org 域名 (DNS/EAI_AGAIN/ENOTFOUND)。通常是 GitHub runner 出口网络抖动，几秒内自愈，不是代码 bug。自托管 runner 尤其容易遇到（公司 DNS 不稳定）。",
+    "action_suggestion": "直接重跑即可。如果同一 fingerprint 24h 内 ≥3 次，检查 runner 区域或换 npm 镜像 (例如 npmmirror)；自托管 runner 检查 /etc/resolv.conf。"
   },
   {
     "id": "pypi-timeout",
@@ -22,8 +23,9 @@
     "seen_count": 32,
     "last_seen": "2026-04-27",
     "source": "seed",
-    "description": "pip / poetry / uv 拉取 PyPI 包时连接超时。绝大多数情况是 PyPI CDN 短暂抖动。",
-    "fix_hint": "重跑。频繁出现时给 pip 配置 `--default-timeout=120` 或换镜像 (清华/阿里)。"
+    "description": "PyPI 包下载超时",
+    "human_explanation": "pip / poetry / uv 拉取 PyPI 包时连接超时。绝大多数情况是 PyPI CDN 短暂抖动，或 pip install 大包（torch、tensorflow）时带宽不足。",
+    "action_suggestion": "重跑。频繁出现时给 pip 配置 `--default-timeout=120` 或换镜像 (清华/阿里)；考虑 actions/cache 缓存 pip wheels。"
   },
   {
     "id": "ghcr-rate-limit",
@@ -35,8 +37,9 @@
     "seen_count": 18,
     "last_seen": "2026-04-26",
     "source": "seed",
-    "description": "GitHub Container Registry 触发匿名拉取速率限制 (60/h)。基础镜像层缓存命中率低或并发 job 太多。",
-    "fix_hint": "重跑通常 OK。长期方案：登录 ghcr (`docker login ghcr.io -u $GITHUB_ACTOR -p $GITHUB_TOKEN`)，或将 base image 镜像到组织自有 registry。"
+    "description": "GitHub Container Registry 速率限制",
+    "human_explanation": "GitHub Container Registry 触发匿名拉取速率限制 (60/h)。基础镜像层缓存命中率低或并发 job 太多时常见。",
+    "action_suggestion": "重跑通常 OK。长期方案：登录 ghcr (`docker login ghcr.io -u $GITHUB_ACTOR -p $GITHUB_TOKEN`)，或将 base image 镜像到组织自有 registry。"
   },
   {
     "id": "runner-disk-full",
@@ -48,8 +51,9 @@
     "seen_count": 5,
     "last_seen": "2026-04-25",
     "source": "seed",
-    "description": "Runner 磁盘耗尽 (默认 14GB)。多数是 docker 镜像 + node_modules + 缓存堆积。重跑很可能再次触发，浪费配额。",
-    "fix_hint": "**不要重跑**。在失败 job 前加一步清理：`docker system prune -af && rm -rf /opt/hostedtoolcache /usr/share/dotnet /usr/local/lib/android` 释放 ~20GB。或迁移到 large runner。"
+    "description": "Runner 磁盘空间耗尽",
+    "human_explanation": "Runner 磁盘耗尽 (默认 14GB)。多数是 docker 镜像 + node_modules + 缓存堆积。重跑很可能再次触发，浪费配额。",
+    "action_suggestion": "**不要重跑**。在失败 job 前加一步清理：`docker system prune -af && rm -rf /opt/hostedtoolcache /usr/share/dotnet /usr/local/lib/android` 释放 ~20GB；或迁移到 large runner。"
   },
   {
     "id": "runner-startup-fail",
@@ -61,8 +65,9 @@
     "seen_count": 12,
     "last_seen": "2026-04-24",
     "source": "seed",
-    "description": "GitHub-hosted runner 分配后未在握手窗口内连接回控制平面。GitHub Actions 自身的偶发问题。",
-    "fix_hint": "重跑。若 24h 内 ≥5 次，检查 https://www.githubstatus.com 是否有 Actions 故障公告。"
+    "description": "Runner 启动失败",
+    "human_explanation": "GitHub-hosted runner 分配后未在握手窗口内连接回控制平面，或自托管 runner 进程被 OOM killer 杀掉。GitHub Actions 自身的偶发问题居多。",
+    "action_suggestion": "重跑。若 24h 内 ≥5 次，检查 https://www.githubstatus.com 是否有 Actions 故障公告；自托管 runner 检查机器负载与磁盘。"
   },
   {
     "id": "trivy-db-update",
@@ -74,8 +79,9 @@
     "seen_count": 8,
     "last_seen": "2026-04-23",
     "source": "seed",
-    "description": "Trivy 启动时从 ghcr.io/aquasecurity/trivy-db 拉取漏洞库失败。本质是 ghcr 限流或网络抖动。",
-    "fix_hint": "重跑。固化方案：缓存 trivy DB (`actions/cache` 路径 ~/.cache/trivy)，或在 trivy-action 中设 `cache-dir` 并 `TRIVY_DB_REPOSITORY` 镜像。"
+    "description": "Trivy 漏洞库下载失败",
+    "human_explanation": "Trivy 启动时从 ghcr.io/aquasecurity/trivy-db 拉取漏洞库失败。本质是 ghcr 限流或网络抖动。",
+    "action_suggestion": "重跑。固化方案：缓存 trivy DB (`actions/cache` 路径 ~/.cache/trivy)，或在 trivy-action 中设 `cache-dir` 并 `TRIVY_DB_REPOSITORY` 镜像。"
   },
   {
     "id": "trufflehog-timeout",
@@ -87,8 +93,9 @@
     "seen_count": 6,
     "last_seen": "2026-04-22",
     "source": "seed",
-    "description": "TruffleHog 全仓扫描超时。在大仓 + 深 git 历史下偶发，并非真有泄漏。",
-    "fix_hint": "重跑。长期：限制 `--since-commit` 或 `--max-depth`，只扫增量；或拆成多个 shard 并行扫。"
+    "description": "TruffleHog 全仓扫描超时",
+    "human_explanation": "TruffleHog 全仓扫描超时。在大仓 + 深 git 历史下偶发，并非真有泄漏。",
+    "action_suggestion": "重跑。长期：限制 `--since-commit` 或 `--max-depth`，只扫增量；或拆成多个 shard 并行扫。"
   },
   {
     "id": "anthropic-rate-limit",
@@ -100,8 +107,9 @@
     "seen_count": 15,
     "last_seen": "2026-04-28",
     "source": "seed",
-    "description": "Anthropic API 触发速率限制 (RPM 或 ITPM)。多个 agent workflow 并发时常见。",
-    "fix_hint": "重跑前等 60s。固化方案：在 _call-harness.yml 加 `concurrency.cancel-in-progress: true` + 不同任务用不同 group；或申请提额。"
+    "description": "Anthropic API 速率限制",
+    "human_explanation": "Anthropic API 触发速率限制 (RPM 或 ITPM)。多个 agent workflow 并发时常见。",
+    "action_suggestion": "重跑前等 60s。固化方案：在 _call-harness.yml 加 `concurrency.cancel-in-progress: true` + 不同任务用不同 group；或申请提额。"
   },
   {
     "id": "langsmith-timeout",
@@ -113,8 +121,9 @@
     "seen_count": 4,
     "last_seen": "2026-04-21",
     "source": "seed",
-    "description": "LangSmith trace 上报网关 504。不影响业务逻辑，只是观测数据丢失。",
-    "fix_hint": "重跑。或在 LangSmith 客户端加 `LANGSMITH_BACKGROUND=true` 让 trace 异步上报，避免阻塞主流程。"
+    "description": "LangSmith 追踪服务超时",
+    "human_explanation": "LangSmith trace 上报网关 504。不影响业务逻辑，只是观测数据丢失。",
+    "action_suggestion": "重跑。或在 LangSmith 客户端加 `LANGSMITH_BACKGROUND=true` 让 trace 异步上报，避免阻塞主流程。"
   },
   {
     "id": "docker-daemon-fail",
@@ -126,7 +135,8 @@
     "seen_count": 9,
     "last_seen": "2026-04-20",
     "source": "seed",
-    "description": "Docker daemon 在 runner 上未启动或已退出。多见于 self-hosted runner，或 GitHub-hosted 在 Docker-in-Docker 场景。",
-    "fix_hint": "重跑 + 通知。在 job 开头加健康检查：`sudo systemctl restart docker || sudo service docker start`，或换 GitHub-hosted ubuntu-latest (默认 Docker 已起)。"
+    "description": "Docker daemon 连接失败",
+    "human_explanation": "Docker daemon 在 runner 上未启动或已退出。多见于 self-hosted runner，或 GitHub-hosted 在 Docker-in-Docker 场景。",
+    "action_suggestion": "重跑 + 通知。在 job 开头加健康检查：`sudo systemctl restart docker || sudo service docker start`，或换 GitHub-hosted ubuntu-latest (默认 Docker 已起)。"
   }
 ]

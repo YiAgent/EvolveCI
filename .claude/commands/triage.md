@@ -2,14 +2,28 @@
 
 **触发**：`agent-triage.yml` 每 15 分钟，或 `workflow_dispatch`。
 
-> 我（agent）**不直接** `gh run list` / 算 fingerprint / 读日志。
-> 这些都由 `scripts/build-triage-input.py` 一步做完，结果写入 JSON。
-> 我只负责：(a) 触发预处理，(b) 对 `needs_tier3=true` 的条目做推理，
-> (c) 把决策写成 `evolveci/triage` issue。
+> **数据已注入** — workflow 的 `collect:` job 已经跑过 `scripts/build-triage-input.py`，
+> 把结果通过 prompt 中的 `DATA_CONTEXT:` 段传给我。我**不再自己**查 gh / 算
+> fingerprint / 读日志 — 这些都是 collect job 的工作。
 
 ## 步骤
 
-### 1. 检查熔断器
+### 1. 解析 DATA_CONTEXT
+
+prompt 中 `DATA_CONTEXT:` 之后是一段 JSON。把它写入临时文件后用 jq 处理：
+
+```bash
+# 从 prompt 中抽出 JSON（即从 "DATA_CONTEXT:" 那行之后到结束）
+sed -n '/^DATA_CONTEXT:/,$p' <<< "$PROMPT_BODY" | sed '1d' > /tmp/triage-input.json
+
+ENTRIES=$(jq '.entries | length' /tmp/triage-input.json)
+T3=$(jq '[.entries[] | select(.needs_tier3)] | length' /tmp/triage-input.json)
+echo "preprocessor: $ENTRIES entries, $T3 need Tier 3"
+```
+
+如果 `ENTRIES=0` → 退出，没有失败需要处理。
+
+### 2. 检查熔断器
 
 ```bash
 BODY=$(gh issue list --label evolveci/circuit --state all -L 1 \
@@ -18,30 +32,8 @@ ACTIVE=$(echo "$BODY" | jq -r '.active // false' 2>/dev/null || echo false)
 TRIPPED=$(echo "$BODY" | jq -r '.tripped_at // empty' 2>/dev/null || echo)
 ```
 
-- `active=true` 且距 `tripped_at` < 24h → **直接退出**，不预处理也不写 issue。
+- `active=true` 且距 `tripped_at` < 24h → **直接退出**，不写 issue。
 - `active=true` 且 ≥24h → 编辑 issue body 设 `active=false`，加一条 comment 记录恢复时间，继续。
-
-### 2. 预处理：收集 + Tier 1 + Tier 2
-
-执行：
-
-```bash
-pip install --user --quiet pyyaml >/dev/null 2>&1 || python3 -m pip install --user --quiet pyyaml >/dev/null 2>&1
-python3 scripts/build-triage-input.py \
-  --since 30m \
-  --max-failures 10 \
-  --out /tmp/triage-input.json
-```
-
-读取结果：
-
-```bash
-ENTRIES=$(jq '.entries | length' /tmp/triage-input.json)
-T3=$(jq '[.entries[] | select(.needs_tier3)] | length' /tmp/triage-input.json)
-echo "preprocessor: $ENTRIES entries, $T3 need Tier 3"
-```
-
-如果 `ENTRIES=0` → 退出，没有失败需要处理。
 
 ### 3. 对每个条目执行决策
 
@@ -50,8 +42,6 @@ jq -c '.entries[]' /tmp/triage-input.json | while read -r e; do
   # ... see decision matrix below ...
 done
 ```
-
-对每条 entry，按下表决定动作：
 
 | `existing_issue` | `tier1.matched` | `tier2.confidence` | `needs_tier3` | 我的动作 |
 |---|---|---|---|---|
@@ -71,27 +61,33 @@ gh issue create \
   --title "$REPO · $WORKFLOW · $FAILED_STEP failure" \
   --label "evolveci/triage,severity/$SEVERITY,category:$CATEGORY,$REPO_LABEL,fingerprint:$FP" \
   --body "$(cat <<EOF
+## 🔴 CI 失败：$REPO / $WORKFLOW / $FAILED_STEP
+
+**时间**: $(date -u +%FT%TZ)
+**指纹**: \`$FP\`
+**Run**: $RUN_URL
+
+### 失败摘要
+
+${SUMMARY:-Tier 1/2 自动分类，详见 action_suggestion。}
+
+### 修复建议
+
+${ACTION_SUGGESTION:-参见对应 evolveci/pattern issue.}
+
+### 脱敏日志摘要
+
+\`\`\`
+$REDACTED_TAIL
+\`\`\`
+
+---
 fingerprint: $FP
 occurrences: 1
 last_seen: $(date -u +%FT%TZ)
 category: $CATEGORY
 severity: $SEVERITY
 pattern_id: ${PATTERN_ID:-none}
-run: $RUN_URL
-
-## 摘要
-
-${SUMMARY:-Tier 1/2 自动分类，详见 fix_hint.}
-
-## 修复建议
-
-${FIX_HINT:-参见对应 evolveci/pattern issue.}
-
-## 脱敏日志摘要
-
-\`\`\`
-$REDACTED_TAIL
-\`\`\`
 EOF
 )"
 ```
@@ -125,6 +121,7 @@ gh run rerun "$RUN_ID" --repo "$REPO" --failed
 
 ## 不做什么
 
+- 不调用 `python3 scripts/build-triage-input.py` — 数据已经在 DATA_CONTEXT 里
 - 不写本地文件（`/tmp/triage-input.json` 例外，用完即弃）
 - 不 git commit / push
-- 不在 prompt 中再次调用 gh run list / 自己解日志 — 用 preprocessor 的输出
+- 不在 prompt 中重复跑 gh 查 actions — DATA_CONTEXT 已经有了
