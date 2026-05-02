@@ -512,8 +512,7 @@ git rm -r memory/
 | 2.2 | 修改 `agent-daily.yml` 注入数据 | `.github/workflows/agent-daily.yml` | P1 |
 | 2.3 | 精简 `daily-report.md` | `.claude/commands/daily-report.md` | P1 |
 | 2.4 | 给 seed pattern 加人类可读字段 | `data/known-patterns.seed.json` | P1 |
-| 2.5 | 修改 seed-patterns.sh 支持新格式 | `scripts/seed-patterns.sh` | P1 |
-| 2.6 | 清理现有 pattern issues | 手动或脚本 | P1 |
+| 2.5 | 种入 pattern issues（从 seed JSON） | `scripts/seed-patterns.sh` | P1 |
 
 ### Phase 3：清理 + 优化（1 天）
 
