@@ -89,11 +89,12 @@
 | `exit code 1`（无其他上下文） | unknown | Tier 3 深度分析 |
 
 ## 近期学习（由 /weekly-report 维护）
+- 2026-05-02: _本周无新模式_（系统首周上线，尚无 incident 数据）
 
 <!-- 格式: YYYY-MM-DD: <pattern-id> — <一句话描述> -->
 <!-- /weekly-report 会在此处追加最近 4 周发现的重要新模式 -->
 
-_（初始状态，尚无学习记录）_
+- 2026-05-02: _本周无新模式_（系统首周上线，尚无 incident 数据）
 
 ## 自我健康检查（/heartbeat 使用）
 
