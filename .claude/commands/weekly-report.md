@@ -114,7 +114,19 @@ else
 fi
 ```
 
-### 5. 开 PR
+### 5. 同步 pattern 知识回 seed 文件
+
+```bash
+bash scripts/sync-patterns-to-seed.sh "$GITHUB_REPOSITORY"
+```
+
+输出 JSON: `{"status":"synced","count":N,"file":"data/known-patterns.seed.json",...}`
+
+这确保 seed 文件始终反映最新 pattern 状态。脚本同时执行：
+- 生命周期检查（dormant/retire 过期 pattern）
+- agent-learned pattern 的 confidence 自动推断
+
+### 6. 开 PR
 
 ```bash
 echo "$REPORT_MARKDOWN" > /tmp/weekly-report.md

@@ -50,8 +50,28 @@ TRIPPED=$(echo "$BODY" | jq -r '.tripped_at // empty')
 
 已由脚本匹配到已知 pattern，直接执行：
 - 读取 `tier1_match.auto_rerun`、`tier1_match.notify`、`tier1_match.severity`
+- 读取 `tier1_match.confidence` 和 `tier1_match.rerun_success_rate`
+- **置信度检查**：如果 `confidence == "unverified"` → 保守策略，不执行 auto_rerun，改为创建 issue
+- **成功率检查**：如果 `rerun_success_rate` 不为 null 且 < 0.5 → auto_rerun 降级为 false，改为创建 issue
 - `auto_rerun=true` → 检查熔断器 + 预算后执行 `gh run rerun`
 - `notify=true` → 创建 evolveci/triage issue（如 `existing_issue` 为 null）
+- **更新 pattern 统计**：Tier 1 命中后，更新 pattern issue 的 `seen_count` +1 和 `last_seen` 为今天：
+
+```bash
+PATTERN_ISSUE=$(gh issue list --label evolveci/pattern --state open \
+  --search "in:title \"pattern: ${PATTERN_ID}\"" -L 1 \
+  --json number,body --jq '.[0]' 2>/dev/null || echo "")
+if [ -n "$PATTERN_ISSUE" ]; then
+  ISSUE_NUM=$(echo "$PATTERN_ISSUE" | jq -r .number)
+  BODY=$(echo "$PATTERN_ISSUE" | jq -r .body)
+  UPDATED_JSON=$(printf '%s\n' "$BODY" \
+    | awk '/^```json[[:space:]]*$/{flag=1;next} /^```[[:space:]]*$/{flag=0} flag' \
+    | jq -c --arg today "$(date -u +%Y-%m-%d)" \
+      '.seen_count = ((.seen_count // 0) + 1) | .last_seen = $today')
+  NEW_BODY=$(printf '%s' "$UPDATED_JSON" | bash scripts/render-pattern.sh)
+  gh issue edit "$ISSUE_NUM" --body "$NEW_BODY"
+fi
+```
 
 #### Case B：`use_heuristic`（tier2_match.confidence == "high"）
 

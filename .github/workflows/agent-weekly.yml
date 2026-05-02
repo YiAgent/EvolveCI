@@ -65,5 +65,5 @@ jobs:
       timeout-minutes: 30
       # date + gh issue list are used by the archive-old-incident step in
       # weekly-report.md. python / pyyaml live in the collect job, not here.
-      extra-allowed-tools: "Bash(bash scripts/weekly-pr.sh),Bash(jq),Bash(date),Bash(gh issue list)"
+      extra-allowed-tools: "Bash(bash scripts/weekly-pr.sh),Bash(bash scripts/sync-patterns-to-seed.sh),Bash(jq),Bash(date),Bash(gh issue list)"
     secrets: inherit

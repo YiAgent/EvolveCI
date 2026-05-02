@@ -95,13 +95,15 @@ match_pattern() {
   fi
 
   while IFS= read -r pattern_json; do
-    local id match_re category severity auto_rerun notify
+    local id match_re category severity auto_rerun notify confidence rerun_success_rate
     id=$(echo "$pattern_json" | jq -r '.id // empty')
     match_re=$(echo "$pattern_json" | jq -r '.match // empty')
     category=$(echo "$pattern_json" | jq -r '.category // "unknown"')
     severity=$(echo "$pattern_json" | jq -r '.severity // "info"')
     auto_rerun=$(echo "$pattern_json" | jq -r '.auto_rerun // false')
     notify=$(echo "$pattern_json" | jq -r '.notify // false')
+    confidence=$(echo "$pattern_json" | jq -r '.confidence // "high"')
+    rerun_success_rate=$(echo "$pattern_json" | jq -r '.rerun_success_rate // "null"')
 
     if [[ -n "$match_re" ]] && echo "$log" | grep -qE "$match_re" 2>/dev/null; then
       jq -nc \
@@ -110,8 +112,11 @@ match_pattern() {
         --arg severity "$severity" \
         --argjson auto_rerun "$auto_rerun" \
         --argjson notify "$notify" \
+        --arg confidence "$confidence" \
+        --argjson rerun_success_rate "$rerun_success_rate" \
         '{pattern_id:$id, category:$category, severity:$severity,
-          auto_rerun:$auto_rerun, notify:$notify}'
+          auto_rerun:$auto_rerun, notify:$notify,
+          confidence:$confidence, rerun_success_rate:$rerun_success_rate}'
       return
     fi
   done < "$PATTERNS_CACHE"

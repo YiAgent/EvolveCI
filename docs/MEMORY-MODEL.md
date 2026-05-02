@@ -34,6 +34,8 @@ agent's surface from human-authored issues with one query.
 | `repo:<org>-<repo>` | hyphenated repo | triage / daily |
 | `category:flaky` `category:infra` `category:code` `category:dependency` `category:unknown` | failure category | triage |
 | `status/recovered` | sentinel on close | heartbeat / triage |
+| `status/dormant` | pattern stale ≥30d | weekly sync (pattern still in seed) |
+| `status/retired` | pattern stale ≥90d | weekly sync (pattern closed + removed from seed) |
 
 ### Bootstrapping
 
@@ -86,8 +88,15 @@ No more `memory/stats/daily/<date>.json` writes.
 ### `/weekly-report` (Mon UTC 02:00)
 
 Weekly is the **only** workflow that produces a PR (not an issue). It writes
-the long-form report into `CLAUDE.md`'s "近期学习" section and optionally
-archives old triage issues by closing them.
+the long-form report into `CLAUDE.md`'s "近期学习" section, syncs pattern
+knowledge back to `data/known-patterns.seed.json`, and optionally archives
+old triage issues by closing them.
+
+**Seed sync**: `scripts/sync-patterns-to-seed.sh` extracts JSON from all open
+`evolveci/pattern` issues, applies lifecycle rules (dormant/retired), infers
+confidence from `seen_count`, and atomically writes the result to the seed file.
+This closes the feedback loop: agent-learned patterns flow back into the seed
+that feeds future triage runs.
 
 Branch name: `weekly/YYYY-Www`. PR title: `weekly: YYYY-Www deep dive`.
 
@@ -101,6 +110,33 @@ Pattern issues use a **dual-format body**: human-readable markdown on top
 machine-readable JSON in a fenced code block at the bottom. Both
 `scripts/seed-patterns.sh` and `/learn-pattern` go through
 `scripts/render-pattern.sh` to produce the body.
+
+#### Pattern JSON fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `id` | string | — | kebab-case identifier |
+| `match` | string | — | regex (≤200 chars, no nested quantifiers) |
+| `category` | string | `"unknown"` | `flaky`, `infra`, `code`, `dependency`, `unknown` |
+| `severity` | string | `"info"` | `critical`, `warning`, `info` |
+| `auto_rerun` | bool | `false` | auto-rerun on Tier 1 match |
+| `notify` | bool | `false` | create triage issue on match |
+| `confidence` | string | `"high"` | `high`, `medium`, `unverified` — inferred from `seen_count` during sync |
+| `rerun_success_rate` | float\|null | `null` | proxy metric; if <0.5, auto_rerun is disabled |
+| `seen_count` | int | `0` | incremented on each Tier 1 hit |
+| `last_seen` | string | `"never"` | ISO date of last Tier 1 hit |
+| `created_at` | string | `"unknown"` | ISO date of pattern creation |
+
+#### Lifecycle
+
+- **Seed patterns** (from `data/known-patterns.seed.json`): `confidence: "high"` by default
+- **Agent-learned patterns**: `confidence: "unverified"` by default
+- **Weekly sync** (`scripts/sync-patterns-to-seed.sh`):
+  - ≥90d unseen → issue closed + `status/retired` label → removed from seed
+  - ≥30d unseen → `status/dormant` label → kept in seed
+  - `seen_count ≥ 10` → `confidence` upgraded to `"high"`
+  - `seen_count ≥ 3` → `confidence` upgraded to `"medium"`
+- **Triage Tier 1 hit**: `seen_count +1`, `last_seen = today` (updated on the pattern issue)
 
 Triage extracts the JSON for matching:
 

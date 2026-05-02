@@ -48,7 +48,8 @@ PATTERN_JSON=$(jq -nc \
   --argjson examples "$EXAMPLES_JSON_ARRAY" \
   '{id:$id, match:$match, category:$category, severity:$severity,
     auto_rerun:$auto_rerun, notify:$notify, description:$description,
-    examples:$examples, source:"agent-learned",
+    examples:$examples, source:"agent-learned", confidence:"unverified",
+    created_at: now | strftime("%Y-%m-%dT%H:%M:%SZ"),
     learned_at: now | strftime("%Y-%m-%dT%H:%M:%SZ")}')
 
 BODY=$(printf '%s' "$PATTERN_JSON" | bash scripts/render-pattern.sh)

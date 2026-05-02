@@ -67,7 +67,7 @@ p.write_text(new_text)
 print(f"appended to CLAUDE.md: {line}")
 PY
 
-git add CLAUDE.md
+git add CLAUDE.md data/known-patterns.seed.json
 git commit -m "weekly(${WEEK}): deep dive"
 git push -u origin "$BR"
 

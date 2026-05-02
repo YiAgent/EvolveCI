@@ -88,6 +88,11 @@ notifications:
   # severity 达到什么级别才通知
   notify_threshold: "warning"   # info | warning | critical
 
+# ── 模式生命周期 ─────────────────────────────────────────────────────────────
+pattern_lifecycle:
+  dormant_days: 30
+  retire_days: 90
+
 # ── 数据收集 ──────────────────────────────────────────────────────────────────
 collect:
   # 日志尾部保留行数（减少 token 消耗）
