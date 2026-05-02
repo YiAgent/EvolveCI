@@ -28,26 +28,16 @@ COUNT=$(gh issue list --label evolveci/triage --state all \
 COUNT=$(gh issue list --label evolveci/pattern --state all -L 100 --json number | jq length)
 ```
 
-如果 `COUNT == 0`（首次运行）：**自动从 `data/known-patterns.seed.json`
-种入**——为每条 seed 创建一个 `evolveci/pattern` Issue，body 是该 seed 的 JSON：
+如果 `COUNT == 0` → **必须立即执行**（不是示例代码，不要跳过）：
 
 ```bash
-if [ "$COUNT" = "0" ] && [ -f data/known-patterns.seed.json ]; then
-  jq -c '.[]' data/known-patterns.seed.json | while read -r p; do
-    ID=$(echo "$p" | jq -r .id)
-    SEV=$(echo "$p" | jq -r '.severity // "info"')
-    CAT=$(echo "$p" | jq -r '.category // "unknown"')
-    gh issue create \
-      --title "pattern: ${ID}" \
-      --label "evolveci/pattern,severity/${SEV},category:${CAT}" \
-      --body "$p"
-  done
-  COUNT=$(jq length data/known-patterns.seed.json)
-fi
+bash scripts/seed-patterns.sh "$GITHUB_REPOSITORY"
 ```
 
-种入后 `COUNT < 10` → **失败**：模式库条目过少（seed 文件可能损坏）。
-否则 → **PASS**。
+该脚本是幂等的：如果已经有任何 `evolveci/pattern` Issue 存在，它会立即跳过；
+否则把 `data/known-patterns.seed.json` 全部种入为 Issue。运行后再次查询 COUNT。
+
+`COUNT < 10` → **失败**：种入失败或 seed 文件损坏。否则 → **PASS**。
 
 ### 探针 3：统计数据新鲜度（警告）
 
