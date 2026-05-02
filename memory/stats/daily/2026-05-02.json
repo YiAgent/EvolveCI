@@ -1,0 +1,16 @@
+{
+  "date": "2026-05-02",
+  "total_runs": 0,
+  "total_failures": 0,
+  "failure_rate": 0,
+  "trend": "no_data",
+  "trend_delta": 0,
+  "workflows": [],
+  "degradations": [],
+  "meta": {
+    "repos_configured": 3,
+    "repos_accessible": 0,
+    "repos_placeholder": ["org/repo-a", "org/repo-b", "org/repo-c"],
+    "note": "All repos in onboarded-repos.yml are placeholder entries. No real CI data available yet. Onboard actual repos to enable monitoring."
+  }
+}
