@@ -27,6 +27,6 @@ jobs:
     with:
       task: heartbeat
       prompt: /heartbeat
-      max-turns: 15
-      timeout-minutes: 10
+      max-turns: 25
+      timeout-minutes: 15
     secrets: inherit
