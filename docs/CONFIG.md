@@ -45,10 +45,12 @@ to **all four** agents at once.
 
 ## Layer 3 — Per-task knobs (one row per `agent-*.yml`)
 
-Each agent workflow file declares exactly four things: cron, slash command,
-turn budget, and timeout. Cron MUST live in the workflow file (GitHub
-constraint). The other three live there because they're naturally read in
-the same place as the cron — don't hunt for them elsewhere.
+Each agent workflow file declares cron, slash command, turn budget, timeout,
+and a permissions block. Cron and permissions MUST live in the workflow file
+(GitHub workflow_call requires the caller to pre-grant a permissions superset
+of what the called workflow declares). The other three live there because
+they're naturally read in the same place as the cron — don't hunt for them
+elsewhere.
 
 | Workflow | Cron | Prompt | max-turns | timeout-min | Notes |
 |----------|------|--------|-----------|-------------|-------|

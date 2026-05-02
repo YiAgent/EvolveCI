@@ -1,5 +1,8 @@
 # /daily-report — workdays at UTC 01:00.
-# All LLM/secret/permissions boilerplate lives in _call-harness.yml.
+# Shared LLM/secret/wrapper boilerplate lives in _call-harness.yml.
+# permissions MUST be declared here too (GitHub requires the calling job to
+# pre-grant a superset of what the called workflow requests; superset cannot
+# be inherited through workflow_call).
 name: "Agent — CI Daily Report"
 
 on:
@@ -10,6 +13,13 @@ on:
 concurrency:
   group: agent-daily
   cancel-in-progress: false
+
+permissions:
+  contents: write       # commit memory updates
+  issues: write         # triage issues
+  pull-requests: write  # sticky comments
+  actions: read         # CI MCP queries
+  id-token: write       # harden-runner
 
 jobs:
   daily:
