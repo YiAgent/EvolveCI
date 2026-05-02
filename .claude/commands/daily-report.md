@@ -1,91 +1,94 @@
-# /daily-report — 生成每日 CI 健康报告
+# /daily-report — 生成每日 CI 健康报告（Issue 内存模型）
 
 **触发方式**：由 `agent-daily.yml` 工作日 UTC 01:00 调用，或通过 `workflow_dispatch` 手动触发。
 
+> 内存模型：每天一个 `evolveci/daily` Issue。同日重跑 → 编辑 body 而非新建。
+> 详见 `docs/MEMORY-MODEL.md`。
+
 ## 执行步骤
 
-### 步骤 1：采集 24 小时数据
+### 步骤 1：聚合最近 24 小时数据
 
-- 读取 `data/onboarded-repos.yml` 获取监控仓库列表
-- 对每个仓库，用 GitHub MCP 工具查询过去 24 小时内所有 workflow runs（all status）
-- 按 `repo/workflow` 分组，计算：
-  - `total_runs`：总次数
-  - `failed_runs`：失败次数
-  - `success_runs`：成功次数
-  - `failure_rate`：失败率（%）
-  - `timed_out_runs`：超时次数
+通过 `mcp__github_ci__*` 与 `gh api` 收集（覆盖 `data/onboarded-repos.yml` 中
+全部仓库）：
 
-### 步骤 2：检测退化
+- 总 workflow run 数、成功率、失败率
+- 按 workflow 维度的 top-5 失败
+- 平均运行时长、p95 运行时长
+- flaky run 比例（用 `evolveci/triage` + `category:flaky` 过滤）
+- 当日新建 / 仍 open 的 `evolveci/triage` 数量
+- 当日 auto-rerun 触发次数、新增 `evolveci/pattern` 数量
 
-- 读取 `memory/stats/daily/` 最近 7 天的 JSON 快照
-- 对每个 workflow，计算 7 天平均失败率
-- 若今日失败率比 7 天均值高 **≥10 个百分点** → 标记为退化（`degraded: true`）
-- 若某 workflow 今日出现但 7 天历史中无记录 → 标记为新 workflow
-
-### 步骤 3：生成报告内容
-
-使用我自己的分析能力生成中文日报（参考 `prompts/observability/daily-report.md` 的格式要求）：
-
-报告结构：
-```markdown
-## CI 日报 — YYYY-MM-DD
-
-### TL;DR
-<2-3 句话总结今日 CI 健康状况，高亮最重要的问题>
-
-### 关键指标
-
-| 指标 | 数值 |
-|------|------|
-| 监控仓库数 | N |
-| 总 workflow 运行次数 | N |
-| 失败次数 | N |
-| 整体失败率 | N% |
-| 自动重跑次数 | N |
-
-### 退化预警 ⚠️
-<列出失败率显著上升的 workflow，含今日 vs 7 天均值对比>
-
-### Top Flaky Workflows
-<失败率最高的前 5 个 workflow>
-
-### 建议行动项
-<基于今日数据的 2-5 条具体建议>
-```
-
-### 步骤 4：持久化与发布
-
-1. 写入 `memory/stats/daily/<今日日期>.json`（原始数据快照）
-2. 通过 GitHub MCP 创建 GitHub Issue：
-   - 标题：`CI 日报 - YYYY-MM-DD`
-   - 标签：`daily-report`、`ci-health`
-   - 正文：步骤 3 生成的 markdown 报告
-3. 若有 `severity=critical` 的退化 → 同时发送 Slack 通知
-
-### 步骤 5：提交记忆
+### 步骤 2：检测退化（与上一工作日对比）
 
 ```bash
-git add memory/stats/daily/
-git commit -m "memory: daily-report — health snapshot YYYY-MM-DD, failure_rate=N%"
-git push origin main
+PREV=$(gh issue list --label evolveci/daily -L 5 --json number,title,body \
+        --jq '.[] | select(.title | startswith("Daily Report — "))')
 ```
 
-## 每日统计 JSON 格式
+取前一份与当前的关键指标对比，标出 ≥20% 的劣化项。
 
-`memory/stats/daily/YYYY-MM-DD.json`：
-```json
-{
-  "date": "YYYY-MM-DD",
-  "total_runs": 127,
-  "total_failures": 14,
-  "failure_rate": 11,
-  "trend": "stable",
-  "trend_delta": 2,
-  "workflows": [
-    {"key": "org/repo/ci.yml", "total": 45, "failed": 3, "failure_rate": 6}
-  ],
-  "degradations": [
-    {"key": "org/repo/pr.yml", "current": 13, "avg_7day": 5, "delta": 8}
-  ]
-}
+### 步骤 3：在 issue 上 upsert
+
+```bash
+TODAY=$(date -u +%Y-%m-%d)
+TITLE="Daily Report — ${TODAY}"
+
+# 是否已有今天的 issue？通过标题前缀搜索（in:title）
+EXISTING=$(gh issue list --label evolveci/daily \
+            --search "in:title \"${TITLE}\"" -L 1 \
+            --json number --jq '.[0].number // empty')
+
+REPORT_BODY=$(render-report)  # 渲染 markdown 报告
+
+if [ -n "$EXISTING" ]; then
+  gh issue edit "$EXISTING" --body "$REPORT_BODY"
+else
+  gh issue create \
+    --title "$TITLE" \
+    --label "evolveci/daily,severity/info" \
+    --body "$REPORT_BODY"
+fi
 ```
+
+### 步骤 4（可选）：Slack 摘要
+
+若有 ≥1 项关键指标恶化，向 `SLACK_WEBHOOK_URL` 发送一条短摘要 + Issue 链接。
+
+## 报告 markdown 模板
+
+```markdown
+# Daily Report — {{today}}
+
+**生成时间**: {{generated_at}} UTC
+
+## 总览
+
+| 指标 | 今日 | 昨日 | 趋势 |
+|------|------|------|------|
+| run 总数 | … | … | ↑/↓/→ |
+| 成功率 | …% | …% | … |
+| flaky 比例 | …% | …% | … |
+| MTTR (h) | … | … | … |
+
+## 当日新增 triage
+
+- #1234 `repo · workflow · step` (severity/critical, category:infra)
+- #1235 …
+
+## 仍 open 的 triage（>24h）
+
+…
+
+## 学习
+
+- 新增 `evolveci/pattern` × N
+- auto-rerun 触发 × N
+- 熔断器状态：active=…
+```
+
+## 不做什么
+
+- 不写 `memory/stats/daily/<date>.json`
+- 不 git commit
+- 不 push 任何分支

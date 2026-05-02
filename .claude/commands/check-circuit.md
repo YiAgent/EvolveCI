@@ -1,82 +1,76 @@
-# /check-circuit — 熔断器状态检查与管理
+# /check-circuit — 熔断器状态（Issue 内存模型）
 
-**触发方式**：由 `/triage` 在每次运行开始时调用，或手动执行以查看熔断器状态。
+**触发方式**：由 `/triage` / `/heartbeat` 在每次运行开始时调用，或手动执行查看状态。
 
-## 熔断器状态文件
+> 内存模型：单一 `evolveci/circuit` Issue 持有熔断器 JSON state。本命令的全部
+> 操作都在该 issue 上完成（编辑 body / 追加 comment）。详见 `docs/MEMORY-MODEL.md`。
 
-`memory/circuit/state.json` 格式：
+## 状态结构
+
 ```json
 {
   "active": false,
-  "reason": "",
   "tripped_at": null,
-  "tripped_dimension": null,
-  "auto_recover_at": null,
-  "history": []
+  "tripped_reason": null,
+  "tripped_by": null,
+  "history": [
+    { "ts": "...", "event": "tripped|recovered", "reason": "..." }
+  ]
 }
 ```
 
-## 执行步骤
+## 读取
 
-### 查询状态（默认操作）
+```bash
+ISSUE=$(gh issue list --label evolveci/circuit --state all -L 1 \
+        --json number --jq '.[0].number // empty')
 
-读取 `memory/circuit/state.json` 并输出当前状态：
+if [ -z "$ISSUE" ]; then
+  # 首次运行 — 创建带默认 state 的 issue
+  gh issue create \
+    --title "EvolveCI circuit breaker" \
+    --label "evolveci/circuit,severity/info" \
+    --body '{"active":false,"tripped_at":null,"tripped_reason":null,"tripped_by":null,"history":[]}'
+  ISSUE=$(gh issue list --label evolveci/circuit --state all -L 1 \
+            --json number --jq '.[0].number')
+fi
 
-- `active: false` → 输出"熔断器正常，可执行自动操作"
-- `active: true` → 输出详细信息：
-  - 触发时间
-  - 触发维度（workflow/pattern/repo）
-  - 触发原因
-  - 预计自动恢复时间（`tripped_at` + 24h）
-  - 相关 GitHub Issue 链接（从 `reason` 中提取）
-
-### 自动恢复检查
-
-若 `active: true` 且 `tripped_at` 距今 ≥ 24h：
-
-1. 将 `active` 设为 `false`，清空 `reason`/`tripped_at`/`tripped_dimension`
-2. 在 `history` 数组追加恢复记录：
-   ```json
-   {
-     "tripped_at": "<原触发时间>",
-     "recovered_at": "<当前ISO8601时间>",
-     "reason": "<原触发原因>",
-     "recovered_by": "auto"
-   }
-   ```
-3. 在对应 GitHub Issue（通过 `reason` 字段中的 Issue 编号找到）添加 comment：
-   ```
-   熔断器已自动恢复（24小时超时）。EvolveCI 将恢复自动分诊。
-   ```
-4. 写回 `memory/circuit/state.json`
-5. 提交：`memory: circuit-recover — auto-recovered after 24h`
-
-### 触发熔断（由 triage 内部调用）
-
-当重跑计数超过预算时：
-
-1. 读取计数器确认维度和原因
-2. 更新 `memory/circuit/state.json`：
-   ```json
-   {
-     "active": true,
-     "reason": "<维度>超限：<repo>/<workflow> 今日已重跑 <N> 次",
-     "tripped_at": "<当前ISO8601时间>",
-     "tripped_dimension": "<workflow|pattern|repo>",
-     "auto_recover_at": "<tripped_at + 24h>"
-   }
-   ```
-3. 通过 GitHub MCP 创建 Issue：
-   - 标题：`[熔断器] <repo>/<workflow> - <维度>预算超限`
-   - 标签：`ci:circuit-broken`、`severity/critical`
-   - 正文说明触发原因、预算配置来源（`data/circuit-config.yml`）、手动恢复方法
-4. 发送 Slack 通知（若配置了 webhook）
-5. 提交：`memory: circuit-trip — <维度> budget exceeded for <repo>/<workflow>`
-
-## 手动恢复方法
-
-若需人工干预恢复熔断器，可通过 `workflow_dispatch` 触发并在 prompt 中说明：
+STATE=$(gh issue view "$ISSUE" --json body --jq .body)
 ```
-/check-circuit recover
+
+## 跳闸 (trip)
+
+由 publisher 在超出预算时调用：
+
+```bash
+NEW=$(echo "$STATE" | jq --arg ts "$(date -u +%FT%TZ)" \
+                         --arg reason "$REASON" \
+                         --arg by "$TRIGGER_RUN_URL" \
+  '.active=true | .tripped_at=$ts | .tripped_reason=$reason | .tripped_by=$by
+   | .history += [{ts:$ts, event:"tripped", reason:$reason}]')
+
+gh issue edit "$ISSUE" --body "$NEW"
+gh issue comment "$ISSUE" --body "🔴 熔断器跳闸：${REASON} ([触发 run](${TRIGGER_RUN_URL}))"
 ```
-这会强制将 `active` 设为 `false` 并记录 `recovered_by: "manual"`。
+
+## 自动恢复 (recover)
+
+`/triage` 或 `/heartbeat` 发现 `active=true` 且 `tripped_at` ≥24h：
+
+```bash
+NEW=$(echo "$STATE" | jq --arg ts "$(date -u +%FT%TZ)" \
+  '.active=false | .tripped_at=null | .tripped_reason=null | .tripped_by=null
+   | .history += [{ts:$ts, event:"recovered", reason:"auto-recover (>24h)"}]')
+
+gh issue edit "$ISSUE" --body "$NEW"
+gh issue comment "$ISSUE" --body "🟢 自动恢复于 $(date -u +%FT%TZ)（已停留 ≥24h）"
+```
+
+## 手动检查
+
+显示当前 state 摘要，不修改任何东西。
+
+## 不做什么
+
+- 不写 `memory/circuit/state.json`
+- 不 git commit

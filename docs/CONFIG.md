@@ -3,6 +3,9 @@
 Single source of truth for everything you can tune in this project. Anything
 not listed here is hard-wired in code and changes via PR.
 
+> **Companion doc**: [`docs/MEMORY-MODEL.md`](./MEMORY-MODEL.md) — how agent
+> memory lives in GitHub Issues (label scheme, per-task semantics, migration).
+
 > **Contract**: each row tells you the knob, where it lives, the default,
 > and how to override. If you change a knob and nothing in the next column
 > matches, the change won't take effect.

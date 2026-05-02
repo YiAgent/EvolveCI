@@ -1,71 +1,118 @@
-# /heartbeat — 自我健康监控
+# /heartbeat — 自我健康监控（基于 Issue 内存模型）
 
 **触发方式**：由 `agent-heartbeat.yml` 每 6 小时调用。
 
+> 内存模型：所有持久化状态都存放在带 `evolveci/*` 前缀标签的 Issue 中。
+> 详见 `docs/MEMORY-MODEL.md`。
+
 ## 执行步骤
 
-依次执行以下 5 个探针，任一关键探针失败则触发告警。
+依次执行以下 5 个探针，任一关键探针失败 → 在 `evolveci/heartbeat` Issue 上累加；
+全部通过 → 关闭任何尚处 open 的 `evolveci/heartbeat` Issue。
 
 ### 探针 1：Triage 活跃度（关键）
 
-检查 `memory/incidents/` 目录：
-- 找到最新的 `.jsonl` 文件（按文件名/路径排序）
-- 读取最后一行，检查 `ts` 字段的 ISO8601 时间戳
-- 若距今 > 24h → **失败**：triage 超过 24 小时未运行
+查询近 24 小时内被更新的 triage Issue：
 
-**预期**：每 15 分钟 triage 一次，24h 内至少有 1 条记录。
+```bash
+SINCE=$(date -u -d '24 hours ago' +%FT%TZ 2>/dev/null || date -u -v-24H +%FT%TZ)
+COUNT=$(gh issue list --label evolveci/triage --state all \
+  --search "updated:>${SINCE}" --json number -L 1 | jq length)
+```
+
+`COUNT == 0` → **失败**：triage 超过 24 小时未运行。
 
 ### 探针 2：模式库健康（关键）
 
-读取 `memory/patterns/known-patterns.json`：
-- 统计条目数
-- 若 < 10 条 → **失败**：模式库条目过少（可能文件损坏）
-- 验证 JSON 格式是否有效（通过 `jq . memory/patterns/known-patterns.json` 检查）
+```bash
+COUNT=$(gh issue list --label evolveci/pattern --state all -L 100 --json number | jq length)
+```
+
+`COUNT < 10` → **失败**：模式库条目过少（首次运行后应已从 `data/known-patterns.seed.json` 种入）。
 
 ### 探针 3：统计数据新鲜度（警告）
 
-读取 `memory/stats/daily/` 目录：
-- 找到最新的 `.json` 文件
-- 检查文件的 `date` 字段
-- 若距今 > 48h → **警告**：daily-report 超过 48 小时未运行
+近 48 小时内是否有更新过的 `evolveci/daily` Issue：
 
-### 探针 4：熔断器状态检查（信息）
+```bash
+SINCE=$(date -u -d '48 hours ago' +%FT%TZ 2>/dev/null || date -u -v-48H +%FT%TZ)
+COUNT=$(gh issue list --label evolveci/daily --state all \
+  --search "updated:>${SINCE}" --json number -L 1 | jq length)
+```
 
-读取 `memory/circuit/state.json`：
-- 若 `active: true` 且 `tripped_at` 距今 > 24h：
-  - 自动恢复（参考 `/check-circuit` 命令）
-  - 记录为警告而非失败
-- 若 `active: true` 且 < 24h：
-  - 记录为信息（熔断器正常工作中，不视为故障）
+`COUNT == 0` → **警告**：daily-report 超过 48 小时未运行。
 
-### 探针 5：目录完整性（关键）
+### 探针 4：熔断器状态（信息）
 
-检查以下目录是否存在：
-- `memory/patterns/`
-- `memory/incidents/`
-- `memory/stats/daily/`
-- `memory/stats/weekly/`
-- `memory/fingerprints/`
-- `memory/circuit/`
-- `memory/counters/`
+读取唯一 `evolveci/circuit` Issue 的 body（JSON），检查 `active` 与 `tripped_at`：
 
-若任一不存在 → **失败**：内存目录结构损坏。
+```bash
+BODY=$(gh issue list --label evolveci/circuit --state all -L 1 --json body --jq '.[0].body // empty')
+ACTIVE=$(echo "$BODY" | jq -r '.active // false')
+TRIPPED=$(echo "$BODY" | jq -r '.tripped_at // empty')
+```
 
-## 告警决策
+- `active=true` 且距 `tripped_at` > 24h → 自动恢复（参考 `/check-circuit`），记为**警告**而非失败。
+- `active=true` 且 < 24h → 记为**信息**（熔断器正常工作中）。
+- 没有 `evolveci/circuit` Issue → 创建一个，body 为 `{"active":false,"history":[]}`。
 
-| 状态 | 条件 | 动作 |
-|------|------|------|
-| 全部健康 | 所有关键探针通过 | 仅输出日志，无动作 |
-| 警告 | 仅非关键探针失败 | 记录警告日志 |
-| 故障 | 任一关键探针失败 | 创建 GitHub Issue + Slack 通知 |
+### 探针 5：标签完整性（关键）
 
-### 故障 Issue 格式
+```bash
+gh label list --limit 100 --json name --jq '.[].name' | grep -c '^evolveci/'
+```
 
-- 标题：`[EvolveCI 健康告警] <探针名称> 失败`
-- 标签：`heartbeat-alert`、`severity/high`
-- 正文：说明失败探针、期望值、实际值、可能原因、建议修复步骤
+返回 `< 5` → **失败**：标签未初始化。提示运行 `bash scripts/bootstrap-labels.sh <owner/repo>`。
 
-## 无需提交记忆
+## 上报：累加到现有 heartbeat Issue 或新建
 
-Heartbeat 本身不产生需要持久化的状态（它是只读探针），**不需要 git commit**。
-若触发了熔断器自动恢复，恢复逻辑本身会在 `/check-circuit` 中处理提交。
+任一关键探针失败时：
+
+```bash
+EXISTING=$(gh issue list --label evolveci/heartbeat --state open -L 1 \
+            --json number --jq '.[0].number // empty')
+
+REPORT="## 心跳报告 — $(date -u +%FT%TZ)
+
+- 探针 1（triage 活跃度）: <status>
+- 探针 2（模式库健康）: <status>
+- 探针 3（数据新鲜度）: <status>
+- 探针 4（熔断器状态）: <status>
+- 探针 5（标签完整性）: <status>
+
+failed_critical: <list>
+
+[run]({{run_url}})"
+
+if [ -n "$EXISTING" ]; then
+  gh issue comment "$EXISTING" --body "$REPORT"
+else
+  gh issue create \
+    --title "EvolveCI heartbeat alert — $(date -u +%Y-%m-%d)" \
+    --label evolveci/heartbeat,severity/critical \
+    --body "$REPORT"
+fi
+```
+
+## 全部通过时：关闭现有 heartbeat Issue
+
+```bash
+EXISTING=$(gh issue list --label evolveci/heartbeat --state open -L 1 \
+            --json number --jq '.[0].number // empty')
+if [ -n "$EXISTING" ]; then
+  gh issue comment "$EXISTING" --body "全部探针在 $(date -u +%FT%TZ) 恢复正常。"
+  gh issue edit "$EXISTING" --add-label status/recovered
+  gh issue close "$EXISTING"
+fi
+```
+
+## Slack 通知（可选）
+
+任何 `severity/critical` 探针失败时，且 `SLACK_WEBHOOK_URL` 存在 → 发送一条
+摘要消息（标题 + 失败探针名 + Issue URL）。
+
+## 不做什么
+
+- 不写 `memory/` 任何文件
+- 不 git commit
+- 不 push 任何分支
