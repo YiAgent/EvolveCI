@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# _call-harness.yml — internal reusable wrapper around OpenCI claude-harness.
+# _call-harness.yml — internal reusable wrapper around OpenCI reusable-agent.
 # ─────────────────────────────────────────────────────────────────────────────
 # DESIGN: every agent workflow in EvolveCI passes the same LLM provider, base
 # URL, secret names, permissions superset, and harness pin. Owning that
@@ -64,7 +64,7 @@ permissions:
 jobs:
   run:
     name: ${{ inputs.task }}
-    uses: YiAgent/OpenCI/.github/workflows/claude-harness.yml@main
+    uses: YiAgent/OpenCI/.github/workflows/reusable-agent.yml@main
     with:
       task:                ${{ inputs.task }}
       prompt:              ${{ inputs.prompt }}
