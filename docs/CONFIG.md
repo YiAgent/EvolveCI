@@ -43,7 +43,7 @@ to **all four** agents at once.
 | GitHub token (cross-repo) | `secrets.CROSS_REPO_PAT` then `secrets.GITHUB_TOKEN` | falls back automatically | Set `CROSS_REPO_PAT` only when monitored repos live outside this org. |
 | Slack webhook | `secrets.SLACK_CI_WEBHOOK` | unset (alerts go silent) | Set to receive Slack alerts. |
 | Permissions superset | hard-coded | `contents:write, issues:write, pull-requests:write, actions:read, id-token:write` | Only edit when the harness reusable workflow's permission requirements change. |
-| Harness pin | `YiAgent/OpenCI/.github/workflows/claude-harness.yml@main` | tracks main | Pin to a SHA when you want a frozen contract. |
+| Harness pin | `YiAgent/OpenCI/.github/workflows/reusable-agent.yml@main` | tracks main | Pin to a SHA when you want a frozen contract. |
 
 ---
 

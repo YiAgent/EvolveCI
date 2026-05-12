@@ -155,7 +155,7 @@ EvolveCI/
 ## 与 OpenCI 的关系
 
 EvolveCI 复用 [OpenCI](https://github.com/YiAgent/OpenCI):
-- AI Agent 调用: `YiAgent/OpenCI/.github/workflows/claude-harness.yml@main`
+- AI Agent 调用: `YiAgent/OpenCI/.github/workflows/reusable-agent.yml@main`
 - Slack 通知: `YiAgent/OpenCI/actions/integrations/slack-notify@v2`
 
 OpenCI 关心**应用**的健康度；EvolveCI 关心**流水线**的健康度。
