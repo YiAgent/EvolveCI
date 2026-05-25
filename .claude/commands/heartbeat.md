@@ -24,15 +24,33 @@ close = 任务失败，即使所有命令都执行了。**下方的 bash 代码�
 
 ### 探针 1：Triage 活跃度（关键）
 
-查询近 24 小时内被更新的 triage Issue：
+triage workflow 每 15 分钟跑一次，但**只有发现 CI 失败时才会更新 issue**。所以
+"近 24h 无 triage 更新"本身不构成故障——必须结合是否存在待分诊的失败来判断。
+
+先看最新 `evolveci/daily` issue body 里的失败数（探针 3 已经查到过最新 daily）：
 
 ```bash
+LATEST_DAILY_BODY=$(gh issue list --label evolveci/daily --state all -L 1 \
+  --search "sort:updated-desc" --json body --jq '.[0].body // empty')
+# 从报告 body 抽取"失败数"那行的数字；找不到则视为 NaN
+DAILY_FAILURES=$(echo "$LATEST_DAILY_BODY" \
+  | grep -oE '失败数[^|]*\|[[:space:]]*[0-9]+' \
+  | grep -oE '[0-9]+$' | head -1)
+
 SINCE=$(date -u -d '24 hours ago' +%FT%TZ 2>/dev/null || date -u -v-24H +%FT%TZ)
-COUNT=$(gh issue list --label evolveci/triage --state all \
+TRIAGE_UPDATES=$(gh issue list --label evolveci/triage --state all \
   --search "updated:>${SINCE}" --json number -L 1 | jq length)
 ```
 
-`COUNT == 0` → **失败**：triage 超过 24 小时未运行。
+判定规则（按顺序）：
+
+- `DAILY_FAILURES == 0` → **PASS**：无 CI 失败 → 无需分诊 → triage 静默是健康状态。
+- `DAILY_FAILURES > 0` 且 `TRIAGE_UPDATES == 0` → **FAIL**：有失败但 triage
+  未跟进，agent-triage 可能掉线或 collect 脚本出错。
+- `DAILY_FAILURES > 0` 且 `TRIAGE_UPDATES > 0` → **PASS**：triage 正常工作中。
+- `DAILY_FAILURES` 无法解析（最新 daily 不存在或格式异常） → 退回旧逻辑：
+  `TRIAGE_UPDATES == 0` 视为 **WARN**（不是 critical），并在报告里注明
+  "daily 数据缺失，无法判断是否应有 triage 活动"。
 
 ### 探针 2：模式库健康（关键 + 自愈）
 
