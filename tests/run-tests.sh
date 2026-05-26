@@ -308,7 +308,7 @@ test_agent_prompts() {
   # JSON written by the workflow's collect: job). Match only inside
   # ```bash fenced blocks so a non-executable mention in prose doesn't
   # satisfy the contract check.
-  local exempt=("check-circuit.md" "learn-pattern.md" "heartbeat.md")
+  local exempt=("check-circuit.md" "learn-pattern.md")
   for cmd in "$commands_dir"/*.md; do
     local base
     base=$(basename "$cmd")
