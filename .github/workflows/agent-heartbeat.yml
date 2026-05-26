@@ -1,8 +1,8 @@
 # /heartbeat — 5 health probes every 6h. Cf. .claude/commands/heartbeat.md.
 # Shared LLM/secret/wrapper boilerplate lives in _call-harness.yml.
-# permissions MUST be declared here too (GitHub requires the calling job to
-# pre-grant a superset of what the called workflow requests; superset cannot
-# be inherited through workflow_call).
+# permissions scoped per-job (least privilege). The reusable-workflow call
+# needs the superset _call-harness.yml requires; the collect job needs only
+# read access.
 name: "Agent — CI Heartbeat"
 
 on:
@@ -14,20 +14,53 @@ concurrency:
   group: agent-heartbeat
   cancel-in-progress: true
 
-permissions:
-  contents: write       # commit memory updates
-  issues: write         # triage issues
-  pull-requests: write  # sticky comments
-  actions: read         # CI MCP queries
-  id-token: write       # harden-runner
+permissions: {}
 
 jobs:
+  collect:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read   # checkout + script
+      actions: read    # gh run list -w agent-triage.yml
+      issues: read     # gh issue list (pattern / daily / circuit)
+    outputs:
+      data_file: ${{ steps.data.outputs.data_file }}
+      summary: ${{ steps.data.outputs.summary }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Phase 1: 确定性数据收集（零 AI 成本）
+      # 5 个探针的所有 gh 查询都在这里做完，agent 只读 JSON 判定。
+      - name: Collect heartbeat data
+        id: data
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bash scripts/collect-heartbeat-data.sh > /tmp/heartbeat-context.json
+          echo "data_file=/tmp/heartbeat-context.json" >> "$GITHUB_OUTPUT"
+          # 注入精简 summary 标量（用于日志可读性，不参与判定）
+          summary=$(jq -c '{
+            p1: (.probe1.success_runs|tostring) + "/" + (.probe1.total_runs|tostring),
+            p2: .probe2.pattern_count,
+            p3_hours: .probe3.stale_hours,
+            p4_active: .probe4.active,
+            p5_count: .probe5.label_count
+          }' /tmp/heartbeat-context.json)
+          echo "summary=$summary" >> "$GITHUB_OUTPUT"
+
   heartbeat:
+    needs: collect
+    permissions:
+      contents: write       # Claude commits memory updates back to main
+      issues: write         # heartbeat issue upsert + close
+      pull-requests: write  # sticky comments (unused here, baseline parity)
+      actions: read         # baseline parity
+      id-token: write       # harden-runner
     uses: ./.github/workflows/_call-harness.yml
     with:
       task: heartbeat
-      prompt: /heartbeat
-      # 5 small gh queries + 1 issue upsert; v5.1 budget.
+      prompt-path: .claude/commands/heartbeat.md
+      context: '{"data_file": "${{ needs.collect.outputs.data_file }}", "summary": "${{ needs.collect.outputs.summary }}"}'
       max-turns: 15
       timeout-minutes: 10
     secrets: inherit

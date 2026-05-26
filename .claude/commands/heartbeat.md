@@ -4,6 +4,9 @@
 
 > 内存模型：所有持久化状态都存放在带 `evolveci/*` 前缀标签的 Issue 中。
 > 详见 `docs/MEMORY-MODEL.md`。
+>
+> **v5.1**：所有探针数据由 `collect-heartbeat-data.sh` 预收集，通过
+> `{{data_file}}` 注入。Agent 只做判定 + 上报，不再自己查 gh。
 
 ## ⚠️ 强制契约（不可违反）
 
@@ -14,114 +17,106 @@
 2. **全部通过时** — 必须执行 `gh issue close` 关闭任何尚处 open 的
    `evolveci/heartbeat` Issue（带恢复 comment + `status/recovered` 标签）。
 
-不允许"探针都跑完了但什么都没写"。这是任务的成功条件——没有 issue 写入或
-close = 任务失败，即使所有命令都执行了。**下方的 bash 代码是你必须执行的
-命令，不是示例。**
+不允许"探针都跑完了但什么都没写"。**下方的 bash 代码是你必须执行的命令，
+不是示例。**
 
-## 执行步骤
-
-依次执行以下 5 个探针，最后**根据强制契约写 issue**。
-
-### 探针 1：Triage 活跃度（关键）
-
-triage workflow 每 15 分钟跑一次，但**只有发现 CI 失败时才会更新 issue**。所以
-"近 24h 无 triage 更新"本身不构成故障——必须结合是否存在待分诊的失败来判断。
-
-先看最新 `evolveci/daily` issue body 里的失败数（探针 3 已经查到过最新 daily）：
+## 步骤 1：读取预处理数据
 
 ```bash
-LATEST_DAILY_BODY=$(gh issue list --label evolveci/daily --state all -L 1 \
-  --search "sort:updated-desc" --json body --jq '.[0].body // empty')
-# 从报告 body 抽取"失败数"那行的数字；找不到则视为 NaN
-DAILY_FAILURES=$(echo "$LATEST_DAILY_BODY" \
-  | grep -oE '失败数[^|]*\|[[:space:]]*[0-9]+' \
-  | grep -oE '[0-9]+$' | head -1)
-
-SINCE=$(date -u -d '24 hours ago' +%FT%TZ 2>/dev/null || date -u -v-24H +%FT%TZ)
-TRIAGE_UPDATES=$(gh issue list --label evolveci/triage --state all \
-  --search "updated:>${SINCE}" --json number -L 1 | jq length)
+DATA_CONTEXT=$(cat '{{data_file}}')
 ```
 
-判定规则（按顺序）：
+`$DATA_CONTEXT` 是 JSON 对象，五个 probe 子对象的字段见下方判定规则。
 
-- `DAILY_FAILURES == 0` → **PASS**：无 CI 失败 → 无需分诊 → triage 静默是健康状态。
-- `DAILY_FAILURES > 0` 且 `TRIAGE_UPDATES == 0` → **FAIL**：有失败但 triage
-  未跟进，agent-triage 可能掉线或 collect 脚本出错。
-- `DAILY_FAILURES > 0` 且 `TRIAGE_UPDATES > 0` → **PASS**：triage 正常工作中。
-- `DAILY_FAILURES` 无法解析（最新 daily 不存在或格式异常） → 退回旧逻辑：
-  `TRIAGE_UPDATES == 0` 视为 **WARN**（不是 critical），并在报告里注明
-  "daily 数据缺失，无法判断是否应有 triage 活动"。
+## 步骤 2：判定每个探针
 
-### 探针 2：模式库健康（关键 + 自愈）
+### 探针 1 — agent-triage workflow 24h 运行健康（critical）
+
+读 `probe1`: `total_runs / success_runs / failure_runs / success_rate / latest_failure_url`
+
+- `total_runs == 0` → **FAIL**（critical）：24h 内一次都没跑。cron 被禁 /
+  Actions 配额耗尽 / workflow 被 disable。报告里附 EvolveCI Actions 页 URL。
+- `success_runs == 0` 且 `total_runs > 0` → **FAIL**（critical）：跑了但全
+  失败。报告附 `latest_failure_url`。
+- `success_rate < 0.5` → **WARN**（非 critical）：间歇性故障。
+- 否则 → **PASS**，报告写 "agent-triage 24h: $success/$total ok"。
+
+> 不再读 `evolveci/triage` issue 活跃度——那个数受被监控仓库失败数影响，
+> 不能代理 workflow 自身健康。
+
+### 探针 2 — 模式库（critical + 自愈）
+
+读 `probe2.pattern_count`。
+
+- `pattern_count == 0` → **必须立即执行**（不是示例，不要跳过）：
+  ```bash
+  bash scripts/seed-patterns.sh "$GITHUB_REPOSITORY"
+  ```
+  种入后**重新跑** `collect-heartbeat-data.sh` 取最新计数。
+- `pattern_count < 10` → **FAIL**：种入失败 / seed 文件损坏。
+- 否则 → **PASS**。
+
+### 探针 3 — daily-report 新鲜度（warning）
+
+读 `probe3.stale_hours`（距上次 daily issue 更新的小时数）。
+
+- `stale_hours == null` → **WARN**：没找到任何 daily issue（部署初期？）。
+- `stale_hours > 48` → **WARN**：daily-report 超过 48h 未运行。
+- 否则 → **PASS**。
+
+非 critical，不计入 `failed_critical`。
+
+### 探针 4 — 熔断器状态（info）
+
+读 `probe4.exists / active / tripped_at`。
+
+- `exists == false` → 立即创建 issue：
+  ```bash
+  gh issue create --title "evolveci circuit state" \
+    --label evolveci/circuit \
+    --body '{"active":false,"history":[]}'
+  ```
+  本探针记为 **INFO**（不计入 failed_critical）。
+- `active == true` 且距 `tripped_at` > 24h → **WARN**：可自动恢复，参考
+  `/check-circuit`。
+- `active == true` 且 < 24h → **INFO**：熔断器正常工作中。
+- 否则（`active == false`） → **PASS**。
+
+### 探针 5 — 标签完整性（info，可降级）
+
+读 `probe5.available / label_count`。
+
+- `available == false` → **SKIP**：API 拒绝。标签是部署期一次性配置，运行
+  期不会消失，不值得用 critical 频繁告警。报告写 "probe-5 skipped: label
+  API unavailable"。
+- `label_count >= 5` → **PASS**。
+- `label_count < 5` → **FAIL**：未初始化。提示运行
+  `bash scripts/bootstrap-labels.sh <owner/repo>`。
+
+## 步骤 3：上报（强制契约）
+
+收集 `failed_critical` 列表——只包含探针 1、2 的 FAIL 状态。其他探针的
+WARN / INFO / SKIP **不**触发 critical 告警。
 
 ```bash
-COUNT=$(gh issue list --label evolveci/pattern --state all -L 100 --json number | jq length)
+REPORT="## 心跳报告 — $(date -u +%FT%TZ)
+
+- 探针 1（triage workflow 健康）: <status> — <p1 detail>
+- 探针 2（模式库健康）: <status> — <p2 detail>
+- 探针 3（数据新鲜度）: <status> — <p3 detail>
+- 探针 4（熔断器状态）: <status> — <p4 detail>
+- 探针 5（标签完整性）: <status> — <p5 detail>
+
+failed_critical: <list 或 none>
+
+[run]({{run_url}})"
 ```
 
-如果 `COUNT == 0` → **必须立即执行**（不是示例代码，不要跳过）：
-
-```bash
-bash scripts/seed-patterns.sh "$GITHUB_REPOSITORY"
-```
-
-该脚本是幂等的：如果已经有任何 `evolveci/pattern` Issue 存在，它会立即跳过；
-否则把 `data/known-patterns.seed.json` 全部种入为 Issue。运行后再次查询 COUNT。
-
-`COUNT < 10` → **失败**：种入失败或 seed 文件损坏。否则 → **PASS**。
-
-### 探针 3：统计数据新鲜度（警告）
-
-近 48 小时内是否有更新过的 `evolveci/daily` Issue：
-
-```bash
-SINCE=$(date -u -d '48 hours ago' +%FT%TZ 2>/dev/null || date -u -v-48H +%FT%TZ)
-COUNT=$(gh issue list --label evolveci/daily --state all \
-  --search "updated:>${SINCE}" --json number -L 1 | jq length)
-```
-
-`COUNT == 0` → **警告**：daily-report 超过 48 小时未运行。
-
-### 探针 4：熔断器状态（信息）
-
-读取唯一 `evolveci/circuit` Issue 的 body（JSON），检查 `active` 与 `tripped_at`：
-
-```bash
-BODY=$(gh issue list --label evolveci/circuit --state all -L 1 --json body --jq '.[0].body // empty')
-ACTIVE=$(echo "$BODY" | jq -r '.active // false')
-TRIPPED=$(echo "$BODY" | jq -r '.tripped_at // empty')
-```
-
-- `active=true` 且距 `tripped_at` > 24h → 自动恢复（参考 `/check-circuit`），记为**警告**而非失败。
-- `active=true` 且 < 24h → 记为**信息**（熔断器正常工作中）。
-- 没有 `evolveci/circuit` Issue → 创建一个，body 为 `{"active":false,"history":[]}`。
-
-### 探针 5：标签完整性（关键）
-
-```bash
-gh label list --limit 100 --json name --jq '.[].name' | grep -c '^evolveci/'
-```
-
-返回 `< 5` → **失败**：标签未初始化。提示运行 `bash scripts/bootstrap-labels.sh <owner/repo>`。
-
-## 上报：累加到现有 heartbeat Issue 或新建
-
-任一关键探针失败时：
+**情况 A — failed_critical 非空**：累加到现有 issue，否则新建。
 
 ```bash
 EXISTING=$(gh issue list --label evolveci/heartbeat --state open -L 1 \
             --json number --jq '.[0].number // empty')
-
-REPORT="## 心跳报告 — $(date -u +%FT%TZ)
-
-- 探针 1（triage 活跃度）: <status>
-- 探针 2（模式库健康）: <status>
-- 探针 3（数据新鲜度）: <status>
-- 探针 4（熔断器状态）: <status>
-- 探针 5（标签完整性）: <status>
-
-failed_critical: <list>
-
-[run]({{run_url}})"
 
 if [ -n "$EXISTING" ]; then
   gh issue comment "$EXISTING" --body "$REPORT"
@@ -133,25 +128,29 @@ else
 fi
 ```
 
-## 全部通过时：关闭现有 heartbeat Issue
+**情况 B — failed_critical 为空**：关闭所有 open heartbeat issue（带
+恢复 comment + `status/recovered` 标签）。
 
 ```bash
 EXISTING=$(gh issue list --label evolveci/heartbeat --state open -L 1 \
             --json number --jq '.[0].number // empty')
 if [ -n "$EXISTING" ]; then
-  gh issue comment "$EXISTING" --body "全部探针在 $(date -u +%FT%TZ) 恢复正常。"
+  gh issue comment "$EXISTING" --body "$REPORT
+
+全部关键探针在 $(date -u +%FT%TZ) 恢复正常。"
   gh issue edit "$EXISTING" --add-label status/recovered
   gh issue close "$EXISTING"
 fi
 ```
 
-## Slack 通知（可选）
+## 步骤 4（可选）：Slack 通知
 
-任何 `severity/critical` 探针失败时，且 `SLACK_WEBHOOK_URL` 存在 → 发送一条
-摘要消息（标题 + 失败探针名 + Issue URL）。
+`failed_critical` 非空且 `SLACK_WEBHOOK_URL` 存在 → 发送一条摘要消息
+（标题 + 失败探针名 + Issue URL）。
 
 ## 不做什么
 
 - 不写本地文件
 - 不 git commit
 - 不 push 任何分支
+- **不再直接 `gh run list / gh issue list`** —— 数据来自 `{{data_file}}`
