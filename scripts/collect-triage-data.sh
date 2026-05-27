@@ -180,10 +180,10 @@ main() {
   # 解析仓库列表 + per-repo `exclude` 配置
   # 输出 JSON 数组：[{"name":"...", "exclude":["a.yml","b.yml"]}, ...]
   local repos_config="[]"
-  if [[ -f "$REPOS_YML" ]]; then
-    repos_config=$(yq -o=json '[.repos[] | {name: .name, exclude: (.exclude // [])}]' "$REPOS_YML" 2>/dev/null \
+  if [[ -f "$CONFIG_FILE" ]]; then
+    repos_config=$(yq -o=json '[.repos[] | {name: .name, exclude: (.exclude // [])}]' "$CONFIG_FILE" 2>/dev/null \
       || python3 -c "import yaml,json,sys
-data = yaml.safe_load(open('$REPOS_YML'))
+data = yaml.safe_load(open('$CONFIG_FILE'))
 print(json.dumps([{'name': r['name'], 'exclude': r.get('exclude', [])} for r in data['repos']]))" 2>/dev/null \
       || echo "[]")
   fi
@@ -194,7 +194,7 @@ print(json.dumps([{'name': r['name'], 'exclude': r.get('exclude', [])} for r in 
   done < <(echo "$repos_config" | jq -r '.[].name')
 
   if [[ ${#repos[@]} -eq 0 ]]; then
-    warn "No repos found in $REPOS_YML"
+    warn "No repos found in $CONFIG_FILE"
     echo '{"failures":[],"summary":{"total_failures":0,"error":"no repos configured"}}'
     return
   fi

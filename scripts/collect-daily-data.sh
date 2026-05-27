@@ -38,7 +38,7 @@ if [ -f "$CONFIG_FILE" ]; then
 fi
 
 if [ ${#repos[@]} -eq 0 ]; then
-  warn "No repos found in $REPOS_YML"
+  warn "No repos found in $CONFIG_FILE"
   echo '{"error":"no repos configured"}'
   exit 0
 fi

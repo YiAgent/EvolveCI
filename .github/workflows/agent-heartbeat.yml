@@ -39,13 +39,7 @@ jobs:
           bash scripts/collect-heartbeat-data.sh > /tmp/heartbeat-context.json
           echo "data_file=/tmp/heartbeat-context.json" >> "$GITHUB_OUTPUT"
           # 注入精简 summary 标量（用于日志可读性，不参与判定）
-          summary=$(jq -c '{
-            p1: (.probe1.success_runs|tostring) + "/" + (.probe1.total_runs|tostring),
-            p2: .probe2.pattern_count,
-            p3_hours: .probe3.stale_hours,
-            p4_active: .probe4.active,
-            p5_count: .probe5.label_count
-          }' /tmp/heartbeat-context.json)
+          summary=$(jq -c '{p1:"\(.probe1.success_runs)/\(.probe1.total_runs)",p2:.probe2.pattern_count,p3_hours:.probe3.stale_hours,p4_active:.probe4.active,p5_count:.probe5.label_count}' /tmp/heartbeat-context.json)
           echo "summary=$summary" >> "$GITHUB_OUTPUT"
 
   heartbeat:
