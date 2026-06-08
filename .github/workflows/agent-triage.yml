@@ -31,6 +31,7 @@ jobs:
     outputs:
       data_file: ${{ steps.data.outputs.data_file }}
       summary: ${{ steps.data.outputs.summary }}
+      total_failures: ${{ steps.data.outputs.total_failures }}
     steps:
       - uses: actions/checkout@v4
 
@@ -47,10 +48,12 @@ jobs:
           echo "data_file=/tmp/triage-context.json" >> "$GITHUB_OUTPUT"
           # 同时注入 summary 标量用于 prompt 模板
           jq -c '.summary' /tmp/triage-context.json >> /tmp/summary.json
-          echo "summary=$(cat /tmp/summary.json)" >> "$GITHUB_OUTPUT" 
+          echo "summary=$(cat /tmp/summary.json)" >> "$GITHUB_OUTPUT"
+          echo "total_failures=$(jq '.summary.total_failures' /tmp/triage-context.json)" >> "$GITHUB_OUTPUT" 
 
   triage:
     needs: collect
+    if: needs.collect.outputs.total_failures != '0'
     permissions:
       contents: write       # Claude commits memory updates back to main
       issues: write         # triage issues
