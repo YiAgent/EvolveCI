@@ -86,7 +86,9 @@ fi
 # ── 探针 5：标签完整性（API 失败时降级为 SKIP） ───────────────────────────────
 
 if probe5_raw=$(gh label list --limit 100 --json name 2>/dev/null); then
-  probe5_count=$(echo "$probe5_raw" | jq -r '.[].name' | grep -c '^evolveci/' || echo "0")
+  # 用 jq 直接计数——grep -c 在零匹配时会同时输出 "0" 并以退出码 1 退出，
+  # 叠加 `|| echo 0` 会产出 "0\n0"，下游 --argjson 解析会失败。
+  probe5_count=$(echo "$probe5_raw" | jq '[.[].name | select(startswith("evolveci/"))] | length')
   probe5_available=true
 else
   probe5_count=0

@@ -60,9 +60,12 @@ CONTEXT=$(cat '{{data_file}}')
 TODAY=$(date -u +%Y-%m-%d)
 TITLE="Daily Report — ${TODAY}"
 
-EXISTING=$(gh issue list --label evolveci/daily \
-            --search "in:title \"${TITLE}\"" -L 1 \
-            --json number --jq '.[0].number // empty')
+# 必须用 jq 做精确标题匹配——gh --search 是模糊全文检索，
+# "Daily Report — 2026-05-26" 会误命中 "Daily Report — 2026-05-02"
+# 等其它日报，导致 edit 覆盖错误的 issue（见 issue #31）。
+EXISTING=$(gh issue list --label evolveci/daily --state all -L 100 \
+            --json number,title \
+            --jq ".[] | select(.title == \"${TITLE}\") | .number" | head -1)
 
 if [ -n "$EXISTING" ]; then
   gh issue edit "$EXISTING" --body "$REPORT_BODY"

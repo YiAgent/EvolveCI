@@ -58,9 +58,10 @@ TRIPPED=$(echo "$BODY" | jq -r '.tripped_at // empty')
 - **更新 pattern 统计**：Tier 1 命中后，更新 pattern issue 的 `seen_count` +1 和 `last_seen` 为今天：
 
 ```bash
-PATTERN_ISSUE=$(gh issue list --label evolveci/pattern --state open \
-  --search "in:title \"pattern: ${PATTERN_ID}\"" -L 1 \
-  --json number,body --jq '.[0]' 2>/dev/null || echo "")
+# 精确标题匹配（--search 模糊检索会误命中相邻 pattern id）
+PATTERN_ISSUE=$(gh issue list --label evolveci/pattern --state open -L 200 \
+  --json number,body,title \
+  --jq "[.[] | select(.title == \"pattern: ${PATTERN_ID}\")][0] // empty" 2>/dev/null || echo "")
 if [ -n "$PATTERN_ISSUE" ]; then
   ISSUE_NUM=$(echo "$PATTERN_ISSUE" | jq -r .number)
   BODY=$(echo "$PATTERN_ISSUE" | jq -r .body)

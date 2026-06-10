@@ -55,8 +55,11 @@ PATTERN_JSON=$(jq -nc \
 BODY=$(printf '%s' "$PATTERN_JSON" | bash scripts/render-pattern.sh)
 
 # 检查是否已经存在同 id 的 pattern issue
-EXISTING=$(gh issue list --label evolveci/pattern --search "in:title pattern: ${ID}" \
-            -L 1 --json number --jq '.[0].number // empty')
+# 精确标题匹配——--search 是模糊全文检索，"pattern: foo" 会误命中
+# "pattern: foo-bar" 等近似 id，导致覆盖错误的 pattern issue。
+EXISTING=$(gh issue list --label evolveci/pattern --state all -L 200 \
+            --json number,title \
+            --jq ".[] | select(.title == \"pattern: ${ID}\") | .number" | head -1)
 
 if [ -n "$EXISTING" ]; then
   # 已有同名 → 视情况编辑（更新描述 / 加 examples）
