@@ -79,7 +79,7 @@ Aggregate 24h, then either edit-in-place (re-run same day) or create a new
 issue:
 
 - title pattern: `Daily Report — YYYY-MM-DD`
-- existing? `gh issue list --label evolveci/daily --search "in:title $(date -u +%Y-%m-%d)"`
+- existing? `gh issue list --label evolveci/daily -L 100 --json number,title --jq ".[] | select(.title == \"Daily Report — $(date -u +%Y-%m-%d)\") | .number"` (exact match — `--search` is fuzzy and can hit the wrong day's report)
 - yes → `gh issue edit <num> --body-file -`
 - no  → `gh issue create --label evolveci/daily,severity/info`
 
