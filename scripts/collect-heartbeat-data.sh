@@ -24,7 +24,7 @@ warn() { echo "::warning::$*" >&2; }
 safe_jq() {
   local input="$1" filter="$2" fallback="${3:-}"
   local result
-  if result=$(echo "$input" | jq -e "$filter" 2>/dev/null); then
+  if result=$(echo "$input" | jq -e -r "$filter" 2>/dev/null); then
     echo "$result"
   else
     echo "$fallback"
@@ -100,12 +100,12 @@ fi
 
 probe4_raw=$(gh issue list --label evolveci/circuit --state all -L 1 \
   --json body 2>/dev/null || echo "[]")
-probe4_body=$(safe_jq "$probe4_raw" -r ".[0].body // empty" "")
+probe4_body=$(safe_jq "$probe4_raw" ".[0].body // empty" "")
 
 if [ -n "$probe4_body" ]; then
   probe4_exists=true
-  probe4_active=$(safe_jq "$probe4_body" -r ".active // false" "false")
-  probe4_tripped_at=$(safe_jq "$probe4_body" -r ".tripped_at // empty" "")
+  probe4_active=$(safe_jq "$probe4_body" ".active // false" "false")
+  probe4_tripped_at=$(safe_jq "$probe4_body" ".tripped_at // empty" "")
 else
   probe4_exists=false
   probe4_active=false
