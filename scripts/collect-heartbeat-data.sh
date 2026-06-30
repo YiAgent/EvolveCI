@@ -18,6 +18,33 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 log()  { echo "::notice::$*" >&2; }
 warn() { echo "::warning::$*" >&2; }
 
+# safe_jq: run jq on potentially-empty/invalid input without killing the script.
+# Usage: safe_jq <input-string> <jq-filter> [fallback]
+# Always outputs valid result; on parse failure, outputs fallback (default: "").
+safe_jq() {
+  local input="$1" filter="$2" fallback="${3:-}"
+  local result
+  if result=$(echo "$input" | jq -e "$filter" 2>/dev/null); then
+    echo "$result"
+  else
+    echo "$fallback"
+  fi
+}
+
+# safe_gh_jq: run gh command, pipe to jq; on any failure output fallback.
+# Usage: safe_gh_jq <jq-filter> <fallback> <gh-args...>
+safe_gh_jq() {
+  local filter="$1" fallback="$2"; shift 2
+  local raw result
+  raw=$(gh "$@" 2>&3 || true)
+  if result=$(echo "$raw" | jq -e "$filter" 2>/dev/null); then
+    echo "$result"
+  else
+    warn "gh command failed or returned non-JSON: gh $*"
+    echo "$fallback"
+  fi
+}
+
 NOW=$(date -u +%FT%TZ)
 SINCE_24H=$(date -u -d '24 hours ago' +%FT%TZ 2>/dev/null || date -u -v-24H +%FT%TZ)
 SINCE_48H=$(date -u -d '48 hours ago' +%FT%TZ 2>/dev/null || date -u -v-48H +%FT%TZ)
@@ -26,39 +53,39 @@ SINCE_48H=$(date -u -d '48 hours ago' +%FT%TZ 2>/dev/null || date -u -v-48H +%FT
 SELF_REPO="${GITHUB_REPOSITORY:-}"
 
 # ── 探针 1：agent-triage workflow 24h 运行健康 ───────────────────────────────
-# 直接查 workflow 的 run 历史，不依赖下游 issue 活跃度（issue 活跃度反映被监控
-# 仓库的失败数，跟 EvolveCI 自身 workflow 健康无因果关系）。
 
 probe1_runs="[]"
 if [ -n "$SELF_REPO" ]; then
   probe1_runs=$(gh run list -R "$SELF_REPO" -w agent-triage.yml --limit 100 \
     --json status,conclusion,createdAt,url 2>/dev/null || echo "[]")
+  # 验证 probe1_runs 是有效 JSON，否则回退
+  if ! echo "$probe1_runs" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    warn "probe1: gh run list returned non-array, falling back to []"
+    probe1_runs="[]"
+  fi
 fi
 
-probe1_total=$(echo "$probe1_runs" \
-  | jq "[.[] | select(.createdAt > \"$SINCE_24H\")] | length")
-probe1_success=$(echo "$probe1_runs" \
-  | jq "[.[] | select(.createdAt > \"$SINCE_24H\" and .conclusion == \"success\")] | length")
-probe1_failure=$(echo "$probe1_runs" \
-  | jq "[.[] | select(.createdAt > \"$SINCE_24H\" and .conclusion == \"failure\")] | length")
-probe1_latest_fail_url=$(echo "$probe1_runs" \
-  | jq -r "[.[] | select(.createdAt > \"$SINCE_24H\" and .conclusion == \"failure\")][0].url // empty")
+probe1_total=$(safe_jq "$probe1_runs" "[.[] | select(.createdAt > \"$SINCE_24H\")] | length" "0")
+probe1_success=$(safe_jq "$probe1_runs" "[.[] | select(.createdAt > \"$SINCE_24H\" and .conclusion == \"success\")] | length" "0")
+probe1_failure=$(safe_jq "$probe1_runs" "[.[] | select(.createdAt > \"$SINCE_24H\" and .conclusion == \"failure\")] | length" "0")
+probe1_latest_fail_url=$(safe_jq "$probe1_runs" "[.[] | select(.createdAt > \"$SINCE_24H\" and .conclusion == \"failure\")][0].url // empty" "")
 
 # ── 探针 2：pattern issue 数 ──────────────────────────────────────────────────
 
-probe2_count=$(gh issue list --label evolveci/pattern --state all -L 100 \
-  --json number 2>/dev/null | jq length || echo "0")
+probe2_raw=$(gh issue list --label evolveci/pattern --state all -L 100 \
+  --json number 2>/dev/null || echo "[]")
+probe2_count=$(safe_jq "$probe2_raw" "length" "0")
 
 # ── 探针 3：最新 daily issue 新鲜度 ───────────────────────────────────────────
 
 probe3_raw=$(gh issue list --label evolveci/daily --state all -L 1 \
-  --search "sort:updated-desc" --json updatedAt,number 2>/dev/null \
-  | jq -c '.[0] // {}')
-probe3_updated_at=$(echo "$probe3_raw" | jq -r '.updatedAt // empty')
-probe3_number=$(echo "$probe3_raw" | jq -r '.number // empty')
+  --search "sort:updated-desc" --json updatedAt,number 2>/dev/null || echo "[]")
+probe3_obj=$(safe_jq "$probe3_raw" ".[0] // {}" "{}")
+probe3_updated_at=$(safe_jq "$probe3_obj" ".updatedAt // empty" "")
+probe3_number=$(safe_jq "$probe3_obj" ".number // empty" "")
 
 # 计算距今小时数（找不到时输出 null）
-if [ -n "$probe3_updated_at" ]; then
+if [ -n "$probe3_updated_at" ] && [ "$probe3_updated_at" != "null" ]; then
   probe3_age_h=$(python3 -c "
 from datetime import datetime, timezone
 u = datetime.fromisoformat('$probe3_updated_at'.replace('Z','+00:00'))
@@ -71,12 +98,14 @@ fi
 
 # ── 探针 4：circuit issue 状态 ────────────────────────────────────────────────
 
-probe4_body=$(gh issue list --label evolveci/circuit --state all -L 1 \
-  --json body 2>/dev/null | jq -r '.[0].body // empty')
+probe4_raw=$(gh issue list --label evolveci/circuit --state all -L 1 \
+  --json body 2>/dev/null || echo "[]")
+probe4_body=$(safe_jq "$probe4_raw" -r ".[0].body // empty" "")
+
 if [ -n "$probe4_body" ]; then
   probe4_exists=true
-  probe4_active=$(echo "$probe4_body" | jq -r '.active // false' 2>/dev/null || echo "false")
-  probe4_tripped_at=$(echo "$probe4_body" | jq -r '.tripped_at // empty' 2>/dev/null || echo "")
+  probe4_active=$(safe_jq "$probe4_body" -r ".active // false" "false")
+  probe4_tripped_at=$(safe_jq "$probe4_body" -r ".tripped_at // empty" "")
 else
   probe4_exists=false
   probe4_active=false
@@ -86,9 +115,7 @@ fi
 # ── 探针 5：标签完整性（API 失败时降级为 SKIP） ───────────────────────────────
 
 if probe5_raw=$(gh label list --limit 100 --json name 2>/dev/null); then
-  # 用 jq 直接计数——grep -c 在零匹配时会同时输出 "0" 并以退出码 1 退出，
-  # 叠加 `|| echo 0` 会产出 "0\n0"，下游 --argjson 解析会失败。
-  probe5_count=$(echo "$probe5_raw" | jq '[.[].name | select(startswith("evolveci/"))] | length')
+  probe5_count=$(safe_jq "$probe5_raw" '[.[].name | select(startswith("evolveci/"))] | length' "0")
   probe5_available=true
 else
   probe5_count=0
