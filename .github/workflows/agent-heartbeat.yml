@@ -55,6 +55,6 @@ jobs:
       task: heartbeat
       prompt-path: .claude/commands/heartbeat.md
       context: '{"data_file": "${{ needs.collect.outputs.data_file }}", "summary": "${{ needs.collect.outputs.summary }}"}'
-      max-turns: 15
-      timeout-minutes: 10
+      max-turns: 25
+      timeout-minutes: 15
     secrets: inherit
