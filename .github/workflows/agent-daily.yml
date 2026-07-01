@@ -59,6 +59,6 @@ jobs:
       task: daily-report
       prompt-path: .claude/commands/daily-report.md
       context: '{"data_file": "${{ needs.collect.outputs.data_file }}", "runs": "${{ needs.collect.outputs.runs }}", "triage": "${{ needs.collect.outputs.triage }}"}'
-      max-turns: 20
-      timeout-minutes: 10
+      max-turns: 30
+      timeout-minutes: 15
     secrets: inherit
